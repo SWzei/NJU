@@ -1,0 +1,9 @@
+{
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "files.autoSave": "onFocusChange",
+  "eslint.validate": ["javascript", "typescript", "vue"],
+  "prettier.singleQuote": true,
+  "prettier.semi": true
+}
