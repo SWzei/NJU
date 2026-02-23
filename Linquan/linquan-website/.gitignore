@@ -24,3 +24,9 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .vscode/*.code-workspace
+
+database/*.db
+backend/uploads/
+node_modules/
+frontend/dist/
+.env

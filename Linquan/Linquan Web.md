@@ -1,5 +1,52 @@
 ## Start up
 
+I found that this website can't be accessed by people who aren't in the same web with me. I want to promote it later(namely, deploy it onto a third party and it can run in long term). Please update it.
+
+
+
+I’ll make the project deployment-ready for public internet access: production CORS, serving frontend build from backend, and clear third‑party deployment scripts/docs. I’ll inspect current backend/frontend config first, then patch and verify.
+
+I identified the core blockers for internet deployment: no production CORS policy, no built-frontend serving from backend, and missing deployment config/docs. I’m patching backend env/app/server and deployment files now.
+
+Context automatically compacted
+
+I’ll finish converting this project to a deployment-ready setup so it can be reached publicly, not only on your local network. I’m first checking the current backend/frontend config and then I’ll patch routing, CORS, scripts, and README with clear production steps.
+
+I confirmed the backend env update is in place, but routing/CORS/scripts/docs are still incomplete for public deployment. Next I’ll patch the remaining files and add one-click deployment config.
+
+I’m now editing the backend entry so production can serve the built frontend directly and CORS can be restricted by environment variable for public deployment safety.
+
+I’m adding a ready-to-use [render.yaml](https://file+.vscode-resource.vscode-cdn.net/c%3A/Users/10629/.vscode/extensions/openai.chatgpt-0.4.76-win32-x64/webview/#) so you can deploy as a public website with persistent SQLite storage and automatic frontend build + backend start.
+
+默认管理员账号（如果你执行过 npm run db:init 且未改环境变量）：
+
+- 学号：A0000000
+- 密码：Admin@123
+
+**Open NPM Scripts**
+
+- In VS Code, open the **Explorer**.
+- Open the **NPM Scripts** panel.
+- If it’s not visible: press `Ctrl+Shift+P` → search **“NPM Scripts”** → select **Show NPM Scripts**.
+- VS Code will list scripts from all `package.json` files.
+
+**Start Backend**
+
+- In **backend/package.json**, run the `dev` script.
+- This starts `nodemon src/server.js`.
+- Backend runs at **http://localhost:4000**.
+
+**Start Frontend**
+
+- In **frontend/package.json**, run the `serve` script.
+- Vue dev server starts with hot reload.
+- Frontend runs at **http://localhost:8080** (or the shown port).
+
+**Open the Site**
+
+- Open the Vue URL in a browser.
+- Frontend connects to the backend automatically.
+
 ### 1. Backend (Terminal A)
 
 ```cmd
