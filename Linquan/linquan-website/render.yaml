@@ -1,10 +1,11 @@
 services:
   - type: web
     name: linquan-website
-    env: node
+    runtime: node
     rootDir: backend
     buildCommand: npm install && npm run build
-    startCommand: npm run db:init && npm start
+    preDeployCommand: npm run db:init
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -21,7 +22,7 @@ services:
         generateValue: true
       - key: ALLOWED_ORIGINS
         sync: false
-    disks:
-      - name: linquan-data
-        mountPath: /var/data
-        sizeGB: 1
+    disk:
+      name: linquan-data
+      mountPath: /var/data
+      sizeGB: 1
