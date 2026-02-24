@@ -26,6 +26,8 @@ Thumbs.db
 .vscode/*.code-workspace
 
 database/*.db
+database/*.db-shm
+database/*.db-wal
 backend/uploads/
 node_modules/
 frontend/dist/

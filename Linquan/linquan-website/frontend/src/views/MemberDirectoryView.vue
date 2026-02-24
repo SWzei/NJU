@@ -45,20 +45,40 @@ const fallbackAvatar =
 
 const members = ref([]);
 const memberKeyword = ref('');
+const remoteGalleryItems = ref([]);
+const remoteGalleryLoaded = ref(false);
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { showError } = useToast();
 
-const galleryItems = computed(() =>
-  linquanGalleryCards.map((item) => ({
+function buildLocalGalleryItems() {
+  return linquanGalleryCards.map((item) => ({
     id: item.id,
     src: item.src,
     fallback: item.fallback,
     title: t(item.titleKey),
     description: t(item.descriptionKey),
     alt: t(item.altKey)
-  }))
-);
+  }));
+}
+
+const galleryItems = computed(() => {
+  if (!remoteGalleryLoaded.value) {
+    return buildLocalGalleryItems();
+  }
+
+  const useZh = locale.value === 'zh';
+  return remoteGalleryItems.value.map((item) => ({
+    id: item.id,
+    src: item.src,
+    fallback: item.fallback || '',
+    title: useZh ? (item.titleZh || item.titleEn || '') : (item.titleEn || item.titleZh || ''),
+    description: useZh
+      ? (item.descriptionZh || item.descriptionEn || '')
+      : (item.descriptionEn || item.descriptionZh || ''),
+    alt: useZh ? (item.altZh || item.altEn || '') : (item.altEn || item.altZh || '')
+  }));
+});
 
 const filteredMembers = computed(() => {
   const keyword = memberKeyword.value.trim().toLowerCase();
@@ -87,6 +107,14 @@ onMounted(async () => {
     members.value = data.items || [];
   } catch (err) {
     showError(err, t('profile.loadFailed'));
+  }
+
+  try {
+    const { data } = await api.get('/gallery');
+    remoteGalleryItems.value = data.items || [];
+    remoteGalleryLoaded.value = true;
+  } catch (err) {
+    remoteGalleryLoaded.value = false;
   }
 });
 </script>

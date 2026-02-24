@@ -130,6 +130,13 @@ function logout() {
   font-weight: 700;
   color: var(--muted);
   cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, filter 0.18s ease;
+}
+
+.lang-btn:hover {
+  background: #232831;
+  color: #e6e6e6;
+  filter: brightness(1.06);
 }
 
 .lang-btn.active {
@@ -145,6 +152,20 @@ function logout() {
   font-weight: 700;
   font-size: 1.1rem;
   line-height: 1;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.14s ease,
+    filter 0.18s ease;
+}
+
+.nav a:hover {
+  background: #2a2f36;
+  color: #ffffff;
+  filter: brightness(1.04);
+  box-shadow: 0 8px 16px rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
 }
 
 .nav a.router-link-active {

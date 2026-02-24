@@ -29,4 +29,27 @@ router.get('/announcements', (req, res) => {
   res.json({ items: rows });
 });
 
+router.get('/gallery', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT
+         id,
+         src,
+         fallback,
+         title_zh AS titleZh,
+         title_en AS titleEn,
+         description_zh AS descriptionZh,
+         description_en AS descriptionEn,
+         alt_zh AS altZh,
+         alt_en AS altEn,
+         display_order AS displayOrder
+       FROM gallery_items
+       WHERE is_visible = 1
+       ORDER BY display_order ASC, id ASC`
+    )
+    .all();
+
+  res.json({ items: rows });
+});
+
 export default router;

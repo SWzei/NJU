@@ -5,6 +5,7 @@
       <router-link :to="{ name: 'adminScheduling' }">{{ t('admin.pageScheduling') }}</router-link>
       <router-link :to="{ name: 'adminConcerts' }">{{ t('admin.pageConcerts') }}</router-link>
       <router-link :to="{ name: 'adminReviews' }">{{ t('admin.pageReviews') }}</router-link>
+      <router-link :to="{ name: 'adminGallery' }">{{ t('admin.pageGallery') }}</router-link>
     </article>
 
     <router-view />
@@ -37,6 +38,20 @@ const { t } = useI18n();
   border: 1px solid var(--line);
   background: var(--panel-soft);
   font-weight: 700;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.14s ease,
+    filter 0.18s ease;
+}
+
+.nav-card a:hover {
+  background: #2a2f36;
+  color: #ffffff;
+  filter: brightness(1.04);
+  box-shadow: 0 8px 16px rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
 }
 
 .nav-card a.router-link-active {

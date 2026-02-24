@@ -21,6 +21,10 @@ const concertUploadDir = path.join(uploadRoot, 'concerts');
 if (!fs.existsSync(concertUploadDir)) {
   fs.mkdirSync(concertUploadDir, { recursive: true });
 }
+const galleryUploadDir = path.join(uploadRoot, 'gallery');
+if (!fs.existsSync(galleryUploadDir)) {
+  fs.mkdirSync(galleryUploadDir, { recursive: true });
+}
 
 const concertUpload = multer({
   storage: multer.diskStorage({
@@ -32,6 +36,25 @@ const concertUpload = multer({
   }),
   limits: {
     fileSize: 20 * 1024 * 1024
+  }
+});
+
+const galleryUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, galleryUploadDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      cb(null, `gallery-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
+    }
+  }),
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype?.startsWith('image/')) {
+      return cb(null, true);
+    }
+    return cb(new HttpError(400, 'Gallery file must be an image'));
   }
 });
 
@@ -77,6 +100,13 @@ function toPublicPath(rawPath) {
 function toStoredUploadPath(filePath) {
   const relativePath = path.relative(uploadRoot, filePath).replaceAll('\\', '/').replace(/^\/+/, '');
   return `/uploads/${relativePath}`;
+}
+
+function mapGalleryRow(item) {
+  return {
+    ...item,
+    isVisible: Boolean(item.isVisible)
+  };
 }
 
 const semesterSchema = z.object({
@@ -164,7 +194,270 @@ const publishResultSchema = z.object({
   feedback: z.string().max(2000).optional()
 });
 
+const createGalleryItemSchema = z.object({
+  src: z.string().min(1).max(512),
+  fallback: z.string().max(512).nullable().optional(),
+  titleZh: z.string().min(1).max(120),
+  titleEn: z.string().min(1).max(120),
+  descriptionZh: z.string().max(600).nullable().optional(),
+  descriptionEn: z.string().max(600).nullable().optional(),
+  altZh: z.string().max(200).nullable().optional(),
+  altEn: z.string().max(200).nullable().optional(),
+  isVisible: z.boolean().default(true),
+  displayOrder: z.number().int().min(0).optional()
+});
+
+const updateGalleryItemSchema = z.object({
+  src: z.string().min(1).max(512).optional(),
+  fallback: z.string().max(512).nullable().optional(),
+  titleZh: z.string().min(1).max(120).optional(),
+  titleEn: z.string().min(1).max(120).optional(),
+  descriptionZh: z.string().max(600).nullable().optional(),
+  descriptionEn: z.string().max(600).nullable().optional(),
+  altZh: z.string().max(200).nullable().optional(),
+  altEn: z.string().max(200).nullable().optional(),
+  isVisible: z.boolean().optional(),
+  displayOrder: z.number().int().min(0).optional()
+});
+
 router.use(authenticate, requireRole('admin'));
+
+router.get('/admin/gallery', (req, res, next) => {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT
+           id,
+           src,
+           fallback,
+           title_zh AS titleZh,
+           title_en AS titleEn,
+           description_zh AS descriptionZh,
+           description_en AS descriptionEn,
+           alt_zh AS altZh,
+           alt_en AS altEn,
+           is_visible AS isVisible,
+           display_order AS displayOrder,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM gallery_items
+         ORDER BY display_order ASC, id ASC`
+      )
+      .all()
+      .map(mapGalleryRow);
+
+    res.json({ items: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/gallery/upload', galleryUpload.single('imageFile'), (req, res, next) => {
+  try {
+    if (!req.file) {
+      throw new HttpError(400, 'Image file is required');
+    }
+    const src = toStoredUploadPath(req.file.path);
+    res.status(201).json({ src });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/gallery', (req, res, next) => {
+  try {
+    const input = createGalleryItemSchema.parse({
+      src: optionalString(req.body.src) || '',
+      fallback: optionalString(req.body.fallback) || null,
+      titleZh: optionalString(req.body.titleZh) || '',
+      titleEn: optionalString(req.body.titleEn) || '',
+      descriptionZh: optionalString(req.body.descriptionZh) || null,
+      descriptionEn: optionalString(req.body.descriptionEn) || null,
+      altZh: optionalString(req.body.altZh) || null,
+      altEn: optionalString(req.body.altEn) || null,
+      isVisible: optionalBoolean(req.body.isVisible),
+      displayOrder:
+        req.body.displayOrder === undefined || req.body.displayOrder === null || req.body.displayOrder === ''
+          ? undefined
+          : Number(req.body.displayOrder)
+    });
+
+    const nextOrder = Number(
+      db.prepare('SELECT COALESCE(MAX(display_order), -1) + 1 AS nextOrder FROM gallery_items').get()?.nextOrder || 0
+    );
+    const displayOrder = input.displayOrder ?? nextOrder;
+
+    const result = db
+      .prepare(
+        `INSERT INTO gallery_items (
+           src, fallback, title_zh, title_en, description_zh, description_en, alt_zh, alt_en, is_visible, display_order
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        input.src,
+        input.fallback,
+        input.titleZh,
+        input.titleEn,
+        input.descriptionZh,
+        input.descriptionEn,
+        input.altZh,
+        input.altEn,
+        input.isVisible ? 1 : 0,
+        displayOrder
+      );
+
+    const created = db
+      .prepare(
+        `SELECT
+           id,
+           src,
+           fallback,
+           title_zh AS titleZh,
+           title_en AS titleEn,
+           description_zh AS descriptionZh,
+           description_en AS descriptionEn,
+           alt_zh AS altZh,
+           alt_en AS altEn,
+           is_visible AS isVisible,
+           display_order AS displayOrder,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM gallery_items
+         WHERE id = ?`
+      )
+      .get(Number(result.lastInsertRowid));
+
+    res.status(201).json(mapGalleryRow(created));
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid gallery item payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.patch('/admin/gallery/:itemId', (req, res, next) => {
+  try {
+    const itemId = Number(req.params.itemId);
+    if (!Number.isInteger(itemId) || itemId <= 0) {
+      throw new HttpError(400, 'Invalid itemId');
+    }
+
+    const input = updateGalleryItemSchema.parse({
+      src: req.body.src === undefined ? undefined : optionalString(req.body.src) || '',
+      fallback: req.body.fallback === undefined ? undefined : optionalString(req.body.fallback),
+      titleZh: req.body.titleZh === undefined ? undefined : optionalString(req.body.titleZh) || '',
+      titleEn: req.body.titleEn === undefined ? undefined : optionalString(req.body.titleEn) || '',
+      descriptionZh:
+        req.body.descriptionZh === undefined ? undefined : optionalString(req.body.descriptionZh),
+      descriptionEn:
+        req.body.descriptionEn === undefined ? undefined : optionalString(req.body.descriptionEn),
+      altZh: req.body.altZh === undefined ? undefined : optionalString(req.body.altZh),
+      altEn: req.body.altEn === undefined ? undefined : optionalString(req.body.altEn),
+      isVisible: optionalBoolean(req.body.isVisible),
+      displayOrder:
+        req.body.displayOrder === undefined || req.body.displayOrder === null || req.body.displayOrder === ''
+          ? undefined
+          : Number(req.body.displayOrder)
+    });
+
+    const current = db
+      .prepare(
+        `SELECT
+           id,
+           src,
+           fallback,
+           title_zh AS titleZh,
+           title_en AS titleEn,
+           description_zh AS descriptionZh,
+           description_en AS descriptionEn,
+           alt_zh AS altZh,
+           alt_en AS altEn,
+           is_visible AS isVisible,
+           display_order AS displayOrder
+         FROM gallery_items
+         WHERE id = ?`
+      )
+      .get(itemId);
+    if (!current) {
+      throw new HttpError(404, 'Gallery item not found');
+    }
+
+    db.prepare(
+      `UPDATE gallery_items
+       SET
+         src = ?,
+         fallback = ?,
+         title_zh = ?,
+         title_en = ?,
+         description_zh = ?,
+         description_en = ?,
+         alt_zh = ?,
+         alt_en = ?,
+         is_visible = ?,
+         display_order = ?,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      input.src ?? current.src,
+      input.fallback === undefined ? current.fallback : input.fallback,
+      input.titleZh ?? current.titleZh,
+      input.titleEn ?? current.titleEn,
+      input.descriptionZh === undefined ? current.descriptionZh : input.descriptionZh,
+      input.descriptionEn === undefined ? current.descriptionEn : input.descriptionEn,
+      input.altZh === undefined ? current.altZh : input.altZh,
+      input.altEn === undefined ? current.altEn : input.altEn,
+      input.isVisible === undefined ? current.isVisible : (input.isVisible ? 1 : 0),
+      input.displayOrder ?? current.displayOrder,
+      itemId
+    );
+
+    const updated = db
+      .prepare(
+        `SELECT
+           id,
+           src,
+           fallback,
+           title_zh AS titleZh,
+           title_en AS titleEn,
+           description_zh AS descriptionZh,
+           description_en AS descriptionEn,
+           alt_zh AS altZh,
+           alt_en AS altEn,
+           is_visible AS isVisible,
+           display_order AS displayOrder,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM gallery_items
+         WHERE id = ?`
+      )
+      .get(itemId);
+
+    res.json(mapGalleryRow(updated));
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid gallery item update payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.delete('/admin/gallery/:itemId', (req, res, next) => {
+  try {
+    const itemId = Number(req.params.itemId);
+    if (!Number.isInteger(itemId) || itemId <= 0) {
+      throw new HttpError(400, 'Invalid itemId');
+    }
+
+    const result = db.prepare('DELETE FROM gallery_items WHERE id = ?').run(itemId);
+    if (result.changes === 0) {
+      throw new HttpError(404, 'Gallery item not found');
+    }
+    res.json({ message: 'Gallery item deleted', itemId });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post('/admin/activities', (req, res, next) => {
   try {

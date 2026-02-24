@@ -172,8 +172,25 @@ CREATE TABLE IF NOT EXISTS notifications (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS gallery_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  src TEXT NOT NULL,
+  fallback TEXT,
+  title_zh TEXT NOT NULL,
+  title_en TEXT NOT NULL,
+  description_zh TEXT,
+  description_en TEXT,
+  alt_zh TEXT,
+  alt_en TEXT,
+  is_visible INTEGER NOT NULL DEFAULT 1 CHECK (is_visible IN (0, 1)),
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_slot_preferences_semester_slot ON slot_preferences(semester_id, slot_id);
 CREATE INDEX IF NOT EXISTS idx_slot_preferences_semester_user ON slot_preferences(semester_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_semester_user ON schedule_assignments(semester_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_semester_slot ON schedule_assignments(semester_id, slot_id);
 CREATE INDEX IF NOT EXISTS idx_concert_applications_concert ON concert_applications(concert_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_items_order ON gallery_items(display_order, id);
