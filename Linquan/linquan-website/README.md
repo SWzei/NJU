@@ -264,8 +264,7 @@ This repo includes `render.yaml`.
 2. In Render, create a new Blueprint and connect your repo.
 3. Render will use:
    - build: `npm install && npm run build` (in `backend/`)
-   - pre-deploy: `npm run db:init`
-   - start: `npm start`
+   - start: `npm run db:init && npm start`
 4. Set `ALLOWED_ORIGINS` to your Render domain:
    - example: `https://linquan-website.onrender.com`
 5. After first deploy, open:
