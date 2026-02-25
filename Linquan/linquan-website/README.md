@@ -386,6 +386,32 @@ Recommended sequence:
 3. update frontend API call (`frontend/src/services/api.js` or views)
 4. run `npm run lint` and `npm run build`
 
+### 12.5 Git Operations (Quick Reference)
+
+From repository root (`D:\\Code\\NJU`):
+
+1. Check current changes:
+   - `git status`
+2. If Git lock error appears:
+   - `if (Test-Path .git\\index.lock) { Remove-Item .git\\index.lock -Force }`
+3. Stage website files:
+   - `git add Linquan/linquan-website`
+4. Create commit:
+   - `git commit -m "your message"`
+5. Push to GitHub:
+   - `git push origin main`
+
+First-time remote setup (if needed):
+
+1. `git remote add origin https://github.com/<your-user>/<your-repo>.git`
+2. `git push -u origin main`
+
+For deployed Render service:
+
+1. `git push` updates deployment source branch.
+2. If Auto-Deploy is enabled, Render redeploys automatically.
+3. If Auto-Deploy is disabled, use Render manual deploy after push.
+
 ## 13. How to Restart Cleanly
 
 If you want a clean local reset:

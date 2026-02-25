@@ -16,8 +16,44 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+function sanitizeFileBase(rawName) {
+  const originalName = String(rawName || '');
+  const ext = path.extname(originalName);
+  const base = path.basename(originalName, ext).trim();
+  const normalized = (base || 'score')
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, '');
+  const safe = normalized
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return safe || 'score';
+}
+
+function resolveFileExtension(file) {
+  const extFromName = path.extname(String(file?.originalname || '')).toLowerCase();
+  if (extFromName) {
+    return extFromName;
+  }
+  const mimeExtMap = {
+    'application/pdf': '.pdf',
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif'
+  };
+  return mimeExtMap[String(file?.mimetype || '').toLowerCase()] || '.bin';
+}
+
 const upload = multer({
-  dest: uploadDir,
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => {
+      const safeBase = sanitizeFileBase(file.originalname);
+      const ext = resolveFileExtension(file);
+      cb(null, `${safeBase}-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    }
+  }),
   limits: {
     fileSize: 10 * 1024 * 1024
   }
