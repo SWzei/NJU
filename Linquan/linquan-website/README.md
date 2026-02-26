@@ -20,7 +20,7 @@ It supports:
 
 - Frontend: Vue 3 + Vue Router + Pinia + Axios (`@vue/cli` 5.0.9)
 - Backend: Node.js + Express + Zod + JWT
-- Database: SQLite (`better-sqlite3`)
+- Database: SQLite (`better-sqlite3`, default) / PostgreSQL (`pg`, Neon via `DATABASE_URL`)
 - Auth: password hash (`bcryptjs`) + JWT token
 - File upload: `multer` (concert score files)
 
@@ -53,7 +53,7 @@ linquan-website/
 │       ├── app.js                 # Express app and route mounting
 │       ├── server.js              # HTTP server entry
 │       ├── config/
-│       │   ├── db.js              # SQLite connection
+│       │   ├── db.js              # DB adapter (SQLite default / Postgres when DATABASE_URL exists)
 │       │   └── env.js             # env loading and constants
 │       ├── middleware/
 │       │   ├── auth.js            # JWT auth + role guard
@@ -225,6 +225,7 @@ Backend `.env` (root-level):
 - `HOST` (default `0.0.0.0`)
 - `PORT` (default `4000`)
 - `JWT_SECRET`
+- `DATABASE_URL` (Neon/Postgres connection string; when set, backend uses Postgres)
 - `DB_PATH` (default `../database/linquan.db` from backend dir)
 - `UPLOAD_ROOT` (default `uploads`; set persistent absolute path in production)
 - `SERVE_FRONTEND` (`true` by default; backend serves `frontend/dist`)
@@ -269,33 +270,51 @@ This repo includes `render.yaml`.
 2. In Render, create a new Blueprint and connect your repo.
 3. Render will use:
    - build: `npm install && npm run build` (in `backend/`)
-   - start: `npm run db:init && npm start`
+   - start: `npm start`
 4. Set `ALLOWED_ORIGINS` to your Render domain:
    - example: `https://linquan-website.onrender.com`
-5. After first deploy, open:
+5. Set `DATABASE_URL` in Render service env to your Neon connection string.
+6. After first deploy, open:
    - `https://<your-service>.onrender.com`
 
-`render.yaml` also mounts a persistent disk at `/var/data` for SQLite and uploads:
+`render.yaml` is configured for Render `free` plan (no disk). Keep in mind:
 
-- `DB_PATH=/var/data/linquan.db`
-- `UPLOAD_ROOT=/var/data/uploads`
+- `DATABASE_URL` must be provided (Neon).
+- `UPLOAD_ROOT=uploads` is ephemeral on free instances. Use object storage (S3/Cloudinary/B2) for persistent uploads.
 
 ### 10.2 Other Platforms (Railway/Fly.io/VM)
 
 Use the same runtime pattern:
 
 1. Build frontend: `cd backend && npm run build`
-2. Start backend: `npm run db:init && npm start`
+2. Start backend:
+   - SQLite mode: `npm run db:init && npm start`
+   - Neon mode (`DATABASE_URL` set): `npm start`
 3. Ensure env vars:
    - `HOST=0.0.0.0`
    - `SERVE_FRONTEND=true`
    - `JWT_SECRET=<strong secret>`
-   - `DB_PATH=<persistent disk path>`
+   - `DATABASE_URL=<postgres connection string>` (Neon mode)
+   - `DB_PATH=<persistent disk path>` (SQLite mode)
    - `UPLOAD_ROOT=<persistent upload path>`
    - `ALLOWED_ORIGINS=https://<your-domain>`
 4. Expose one HTTP port from backend service.
 
 For long-term production with heavier traffic, consider migrating DB from SQLite to PostgreSQL.
+
+### 10.3 SQLite -> Neon Migration Notes
+
+Recommended migration path:
+
+1. Keep local SQLite as source DB.
+2. Create Neon database and get `DATABASE_URL`.
+3. Import data with `pgloader` (preferred) or your own migration script.
+4. Verify row counts in Neon before switching Render `DATABASE_URL`.
+5. Redeploy and check `/api/health`.
+
+Important:
+
+- If a migration script creates every column as `TEXT`, schema constraints/types are lost. Recreate schema correctly, then re-import data.
 
 ## 11. API Overview
 

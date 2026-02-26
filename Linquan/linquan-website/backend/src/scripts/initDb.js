@@ -3,6 +3,7 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import db from '../config/db.js';
 import '../config/env.js';
+import { DATABASE_URL } from '../config/env.js';
 import { createStandardSlots } from '../utils/semester.js';
 
 function readSchema() {
@@ -74,6 +75,12 @@ function ensureDefaultSemester() {
 }
 
 function main() {
+  if (DATABASE_URL) {
+    // eslint-disable-next-line no-console
+    console.log('DATABASE_URL detected. Skip SQLite init script.');
+    return;
+  }
+
   const schema = readSchema();
   db.exec(schema);
   ensureAdmin();

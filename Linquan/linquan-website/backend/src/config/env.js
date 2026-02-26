@@ -13,6 +13,7 @@ dotenv.config(envFile ? { path: envFile } : undefined);
 export const PORT = Number(process.env.PORT || 4000);
 export const HOST = process.env.HOST || '0.0.0.0';
 export const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-this';
+export const DATABASE_URL = process.env.DATABASE_URL || '';
 export const DB_PATH = process.env.DB_PATH || '../database/linquan.db';
 export const UPLOAD_ROOT = process.env.UPLOAD_ROOT || 'uploads';
 export const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS || '';

@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: npm install && npm run build
-    startCommand: npm run db:init && npm start
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -14,15 +14,11 @@ services:
         value: 0.0.0.0
       - key: SERVE_FRONTEND
         value: true
-      - key: DB_PATH
-        value: /var/data/linquan.db
+      - key: DATABASE_URL
+        sync: false
       - key: UPLOAD_ROOT
-        value: /var/data/uploads
+        value: uploads
       - key: JWT_SECRET
         generateValue: true
       - key: ALLOWED_ORIGINS
         sync: false
-    disk:
-      name: linquan-data
-      mountPath: /var/data
-      sizeGB: 1
