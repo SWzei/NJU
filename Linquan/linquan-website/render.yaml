@@ -3,7 +3,7 @@ services:
     name: linquan-website
     runtime: node
     plan: free
-    rootDir: backend
+    rootDir: Linquan/linquan-website/backend
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
