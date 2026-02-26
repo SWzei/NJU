@@ -1,19 +1,27 @@
 import { parentPort, workerData } from 'worker_threads';
 import pg from 'pg';
 
-const { Client, types } = pg;
+const { Pool, types } = pg;
 types.setTypeParser(20, (value) => Number(value)); // int8
 types.setTypeParser(21, (value) => Number(value)); // int2
 types.setTypeParser(23, (value) => Number(value)); // int4
 
 const encoder = new TextEncoder();
 
-const client = new Client({
-  connectionString: workerData.databaseUrl
+const pool = new Pool({
+  connectionString: workerData.databaseUrl,
+  max: Number(process.env.PG_POOL_MAX || 4),
+  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
+  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
+  keepAlive: true
 });
 
-let initError = null;
 let queue = Promise.resolve();
+
+pool.on('error', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('Postgres pool error:', err.message);
+});
 
 function writeResponse(sab, payload, statusCode) {
   const header = new Int32Array(sab, 0, 2);
@@ -48,40 +56,22 @@ function writeResponse(sab, payload, statusCode) {
 
 async function executeQuery({ sql, params, mode }) {
   if (mode === 'exec') {
-    await client.query(sql);
+    await pool.query(sql);
     return { rowCount: 0, rows: [] };
   }
 
-  const result = await client.query(sql, Array.isArray(params) ? params : []);
+  const result = await pool.query(sql, Array.isArray(params) ? params : []);
   return {
     rowCount: Number(result.rowCount || 0),
     rows: result.rows || []
   };
 }
 
-await client.connect().catch((err) => {
-  initError = err;
-});
-
 parentPort.on('message', (message) => {
   queue = queue
     .then(async () => {
       const { sab, sql, params, mode } = message;
       if (!sab) {
-        return;
-      }
-
-      if (initError) {
-        writeResponse(
-          sab,
-          {
-            ok: false,
-            error: {
-              message: initError.message
-            }
-          },
-          2
-        );
         return;
       }
 
@@ -110,7 +100,7 @@ parentPort.on('message', (message) => {
 
 process.on('beforeExit', async () => {
   try {
-    await client.end();
+    await pool.end();
   } catch (err) {
     // Ignore shutdown errors.
   }

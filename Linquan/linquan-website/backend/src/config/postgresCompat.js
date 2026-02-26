@@ -83,23 +83,39 @@ class PostgresCompatDb {
     this.queryTimeoutMs = Number(process.env.PG_QUERY_TIMEOUT_MS || DEFAULT_QUERY_TIMEOUT_MS);
     this.transactionDepth = 0;
     this.savepointCounter = 0;
+    this.worker = null;
+    this.workerReady = false;
 
+    this._spawnWorker();
+  }
+
+  _spawnWorker() {
     this.worker = new Worker(new URL('./postgresWorker.js', import.meta.url), {
       type: 'module',
-      workerData: { databaseUrl }
+      workerData: { databaseUrl: this.databaseUrl }
     });
+    this.workerReady = true;
 
     this.worker.on('error', (err) => {
       // eslint-disable-next-line no-console
       console.error('Postgres worker error:', err);
+      this.workerReady = false;
     });
 
     this.worker.on('exit', (code) => {
+      this.workerReady = false;
+      this.worker = null;
       if (code !== 0) {
         // eslint-disable-next-line no-console
         console.error(`Postgres worker exited with code ${code}`);
       }
     });
+  }
+
+  _ensureWorker() {
+    if (!this.worker || !this.workerReady) {
+      this._spawnWorker();
+    }
   }
 
   prepare(sql) {
@@ -197,6 +213,8 @@ class PostgresCompatDb {
   }
 
   _dispatch(rawSql, params, mode) {
+    this._ensureWorker();
+
     const { sql, placeholderCount } = normalizeSqlText(rawSql);
     const boundParams = Array.isArray(params) ? params : [];
 
