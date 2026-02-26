@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS concert_applications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   concert_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
+  applicant_name TEXT,
+  applicant_student_number TEXT,
+  piece_zh TEXT,
+  piece_en TEXT,
+  duration_min INTEGER,
+  contact_qq TEXT,
   piece_title TEXT NOT NULL,
   composer TEXT,
   score_file_path TEXT,
@@ -142,6 +148,19 @@ CREATE TABLE IF NOT EXISTS concert_applications (
   FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE (concert_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS schedule_operation_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER,
+  semester_id INTEGER,
+  operation_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (batch_id) REFERENCES schedule_batches(id) ON DELETE SET NULL,
+  FOREIGN KEY (semester_id) REFERENCES semesters(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS audition_slots (
@@ -193,4 +212,5 @@ CREATE INDEX IF NOT EXISTS idx_slot_preferences_semester_user ON slot_preference
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_semester_user ON schedule_assignments(semester_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_semester_slot ON schedule_assignments(semester_id, slot_id);
 CREATE INDEX IF NOT EXISTS idx_concert_applications_concert ON concert_applications(concert_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_operation_logs_batch_time ON schedule_operation_logs(batch_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_gallery_items_order ON gallery_items(display_order, id);

@@ -60,9 +60,12 @@ const upload = multer({
 });
 
 const applicationSchema = z.object({
-  pieceTitle: z.string().min(1).max(200),
-  composer: z.string().max(200).optional().or(z.literal('')).transform((v) => v || null),
-  note: z.string().max(1000).optional().or(z.literal('')).transform((v) => v || null)
+  applicantName: z.string().min(1).max(80),
+  applicantStudentNumber: z.string().min(3).max(32),
+  pieceZh: z.string().min(1).max(240),
+  pieceEn: z.string().min(1).max(320),
+  durationMin: z.coerce.number().int().min(1).max(180),
+  contactQq: z.string().min(4).max(32)
 });
 
 function toPublicPath(rawPath) {
@@ -126,11 +129,31 @@ router.post(
         throw new HttpError(400, 'Concert is not accepting applications');
       }
 
+      const currentUserInfo = db
+        .prepare(
+          `SELECT
+             u.student_number AS studentNumber,
+             COALESCE(p.display_name, u.student_number) AS displayName
+           FROM users u
+           LEFT JOIN profiles p ON p.user_id = u.id
+           WHERE u.id = ?`
+        )
+        .get(req.user.id);
+      if (!currentUserInfo) {
+        throw new HttpError(404, 'Current user not found');
+      }
+
       const input = applicationSchema.parse({
-        pieceTitle: req.body.pieceTitle,
-        composer: req.body.composer,
-        note: req.body.note
+        applicantName: req.body.applicantName || currentUserInfo.displayName,
+        applicantStudentNumber: req.body.applicantStudentNumber || currentUserInfo.studentNumber,
+        pieceZh: req.body.pieceZh,
+        pieceEn: req.body.pieceEn,
+        durationMin: req.body.durationMin,
+        contactQq: req.body.contactQq
       });
+      if (input.applicantStudentNumber !== currentUserInfo.studentNumber) {
+        throw new HttpError(400, 'Student number does not match current account');
+      }
       const scorePath = req.file ? toStoredUploadPath(req.file.path) : null;
 
       const existing = db
@@ -142,16 +165,54 @@ router.post(
       if (existing) {
         db.prepare(
           `UPDATE concert_applications
-           SET piece_title = ?, composer = ?, score_file_path = COALESCE(?, score_file_path),
-               note = ?, status = 'submitted', feedback = NULL, updated_at = CURRENT_TIMESTAMP
+           SET
+             applicant_name = ?,
+             applicant_student_number = ?,
+             piece_zh = ?,
+             piece_en = ?,
+             duration_min = ?,
+             contact_qq = ?,
+             piece_title = ?,
+             composer = ?,
+             score_file_path = COALESCE(?, score_file_path),
+             note = NULL,
+             status = 'submitted',
+             feedback = NULL,
+             updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`
-        ).run(input.pieceTitle, input.composer, scorePath, input.note, existing.id);
+        ).run(
+          input.applicantName,
+          input.applicantStudentNumber,
+          input.pieceZh,
+          input.pieceEn,
+          input.durationMin,
+          input.contactQq,
+          input.pieceZh,
+          input.pieceEn,
+          scorePath,
+          existing.id
+        );
       } else {
         db.prepare(
           `INSERT INTO concert_applications
-             (concert_id, user_id, piece_title, composer, score_file_path, note, status)
-           VALUES (?, ?, ?, ?, ?, ?, 'submitted')`
-        ).run(concertId, req.user.id, input.pieceTitle, input.composer, scorePath, input.note);
+             (
+               concert_id, user_id, applicant_name, applicant_student_number, piece_zh, piece_en,
+               duration_min, contact_qq, piece_title, composer, score_file_path, note, status
+             )
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'submitted')`
+        ).run(
+          concertId,
+          req.user.id,
+          input.applicantName,
+          input.applicantStudentNumber,
+          input.pieceZh,
+          input.pieceEn,
+          input.durationMin,
+          input.contactQq,
+          input.pieceZh,
+          input.pieceEn,
+          scorePath
+        );
       }
 
       const application = db
@@ -160,8 +221,14 @@ router.post(
              id,
              concert_id AS concertId,
              user_id AS userId,
-             piece_title AS pieceTitle,
-             composer,
+             applicant_name AS applicantName,
+             applicant_student_number AS applicantStudentNumber,
+             COALESCE(piece_zh, piece_title) AS pieceZh,
+             COALESCE(piece_en, composer) AS pieceEn,
+             duration_min AS durationMin,
+             contact_qq AS contactQq,
+             COALESCE(piece_zh, piece_title) AS pieceTitle,
+             COALESCE(piece_en, composer) AS composer,
              score_file_path AS scoreFilePath,
              note,
              status,
@@ -199,8 +266,14 @@ router.get('/concerts/:concertId/my-application', authenticate, (req, res, next)
            id,
            concert_id AS concertId,
            user_id AS userId,
-           piece_title AS pieceTitle,
-           composer,
+           applicant_name AS applicantName,
+           applicant_student_number AS applicantStudentNumber,
+           COALESCE(piece_zh, piece_title) AS pieceZh,
+           COALESCE(piece_en, composer) AS pieceEn,
+           duration_min AS durationMin,
+           contact_qq AS contactQq,
+           COALESCE(piece_zh, piece_title) AS pieceTitle,
+           COALESCE(piece_en, composer) AS composer,
            score_file_path AS scoreFilePath,
            note,
            status,
@@ -242,8 +315,8 @@ router.get('/concerts/:concertId/auditions', authenticate, (req, res, next) => {
            aus.end_time AS endTime,
            aus.location,
            ca.id AS applicationId,
-           ca.piece_title AS pieceTitle,
-           COALESCE(p.display_name, u.student_number) AS performerName
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
+            COALESCE(p.display_name, u.student_number) AS performerName
          FROM audition_slots aus
          LEFT JOIN concert_applications ca ON ca.id = aus.application_id
          LEFT JOIN users u ON u.id = ca.user_id
@@ -274,7 +347,13 @@ router.get('/concerts/:concertId/results', authenticate, (req, res, next) => {
              ca.user_id AS userId,
              u.student_number AS studentNumber,
              COALESCE(p.display_name, u.student_number) AS displayName,
-             ca.piece_title AS pieceTitle,
+             ca.applicant_name AS applicantName,
+             ca.applicant_student_number AS applicantStudentNumber,
+             COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+             COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+             ca.duration_min AS durationMin,
+             ca.contact_qq AS contactQq,
+             COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
              ca.status,
              ca.feedback,
              ca.updated_at AS updatedAt
@@ -292,7 +371,11 @@ router.get('/concerts/:concertId/results', authenticate, (req, res, next) => {
       .prepare(
         `SELECT
            id,
-           piece_title AS pieceTitle,
+           COALESCE(piece_zh, piece_title) AS pieceZh,
+           COALESCE(piece_en, composer) AS pieceEn,
+           duration_min AS durationMin,
+           contact_qq AS contactQq,
+           COALESCE(piece_zh, piece_title) AS pieceTitle,
            status,
            feedback,
            updated_at AS updatedAt

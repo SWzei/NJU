@@ -10,6 +10,7 @@ import HttpError from '../utils/httpError.js';
 import { createStandardSlots, resolveSemesterId } from '../utils/semester.js';
 import {
   generateProposedSchedule,
+  updateProposedSchedule,
   publishScheduleBatch
 } from '../services/schedulerService.js';
 import { notifyUsers } from '../services/notificationService.js';
@@ -109,6 +110,166 @@ function mapGalleryRow(item) {
   };
 }
 
+function escapeCsv(value) {
+  const text = String(value ?? '');
+  if (text.includes('"') || text.includes(',') || text.includes('\n')) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function getLatestProposedBatchForSemester(semesterId) {
+  return db
+    .prepare(
+      `SELECT id, semester_id AS semesterId, created_at AS createdAt
+       FROM schedule_batches
+       WHERE semester_id = ? AND status = 'proposed'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    )
+    .get(semesterId);
+}
+
+function getScheduleCompliance(semesterId, batchId) {
+  const totalSlots = Number(
+    db
+      .prepare('SELECT COUNT(*) AS count FROM room_slots WHERE semester_id = ?')
+      .get(semesterId)?.count || 0
+  );
+  const totalMembers = Number(
+    db
+      .prepare(
+        `SELECT COUNT(DISTINCT user_id) AS count
+         FROM slot_preferences
+         WHERE semester_id = ?`
+      )
+      .get(semesterId)?.count || 0
+  );
+
+  const memberHours = batchId
+    ? db
+      .prepare(
+        `SELECT user_id AS userId, COUNT(*) AS hours
+         FROM schedule_assignments
+         WHERE batch_id = ?
+         GROUP BY user_id`
+      )
+      .all(batchId)
+    : [];
+
+  const assignedMembers = memberHours.length;
+  const totalAssignedSlots = memberHours.reduce((sum, item) => sum + Number(item.hours || 0), 0);
+  const overTwoMembers = memberHours.filter((item) => Number(item.hours || 0) > 2).length;
+  const oneOrTwoMembers = memberHours.filter((item) => {
+    const hours = Number(item.hours || 0);
+    return hours >= 1 && hours <= 2;
+  }).length;
+  const expectedMaxFairMembers = Math.min(totalMembers, totalSlots);
+
+  const fairness = {
+    expectedMaxFairMembers,
+    achievedMembersWithAtLeastOne: assignedMembers,
+    satisfied: assignedMembers >= expectedMaxFairMembers
+  };
+  const rangeRule = {
+    overTwoMembers,
+    satisfied: overTwoMembers === 0
+  };
+  const utilization = totalSlots > 0 ? totalAssignedSlots / totalSlots : 0;
+
+  return {
+    totalMembers,
+    assignedMembers,
+    unassignedMembers: Math.max(0, totalMembers - assignedMembers),
+    oneOrTwoMembers,
+    overTwoMembers,
+    totalSlots,
+    totalAssignedSlots,
+    utilization,
+    fairness,
+    rangeRule,
+    basicRequirementSatisfied: fairness.satisfied && rangeRule.satisfied
+  };
+}
+
+function listScheduleOperations(semesterId, batchId, limit = 60) {
+  const rows = db
+    .prepare(
+      `SELECT
+         id,
+         batch_id AS batchId,
+         semester_id AS semesterId,
+         operation_type AS operationType,
+         payload_json AS payloadJson,
+         created_by AS createdBy,
+         created_at AS createdAt
+       FROM schedule_operation_logs
+       WHERE semester_id = ?
+         AND (? IS NULL OR batch_id = ?)
+       ORDER BY id DESC
+       LIMIT ?`
+    )
+    .all(semesterId, batchId ?? null, batchId ?? null, limit);
+
+  return rows.map((item) => {
+    let payload = null;
+    if (item.payloadJson) {
+      try {
+        payload = JSON.parse(item.payloadJson);
+      } catch (err) {
+        payload = null;
+      }
+    }
+    return {
+      ...item,
+      payload
+    };
+  });
+}
+
+function recordScheduleOperation({
+  batchId = null,
+  semesterId = null,
+  operationType,
+  payload = null,
+  adminId = null
+}) {
+  db.prepare(
+    `INSERT INTO schedule_operation_logs (
+       batch_id, semester_id, operation_type, payload_json, created_by
+     ) VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    batchId,
+    semesterId,
+    operationType,
+    payload ? JSON.stringify(payload) : null,
+    adminId
+  );
+}
+
+function deriveUnsatisfiedMembers(members) {
+  return (members || [])
+    .filter((item) => {
+      const assigned = Number(item.assignedCount || 0);
+      return assigned < 1 || assigned > 2;
+    })
+    .map((item) => {
+      const assigned = Number(item.assignedCount || 0);
+      let reason = 'no_assignment';
+      if (assigned > 2) {
+        reason = 'over_limit';
+      }
+      return {
+        userId: item.userId,
+        studentNumber: item.studentNumber,
+        displayName: item.displayName,
+        assignedCount: assigned,
+        preferenceCount: Number(item.preferenceCount || 0),
+        reason
+      };
+    });
+}
+
 const semesterSchema = z.object({
   name: z.string().min(2).max(80),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -153,7 +314,7 @@ const createManualAssignmentSchema = z.object({
 });
 
 const publishScheduleSchema = z.object({
-  batchId: z.number().int().positive()
+  semesterId: z.number().int().positive().optional()
 });
 
 const exportScheduleSchema = z.object({
@@ -842,15 +1003,59 @@ router.post('/admin/scheduling/run', (req, res, next) => {
       semesterId,
       adminId: req.user.id
     });
+    recordScheduleOperation({
+      batchId: result.batchId,
+      semesterId,
+      operationType: 'run_schedule',
+      payload: {
+        stats: result.stats
+      },
+      adminId: req.user.id
+    });
 
     res.status(201).json({
-      message: 'Schedule generated as proposed batch',
+      message: 'Draft schedule generated',
       semesterId,
       ...result
     });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid schedule request payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.post('/admin/scheduling/update', (req, res, next) => {
+  try {
+    const input = runScheduleSchema.parse({
+      semesterId: req.body.semesterId ? Number(req.body.semesterId) : undefined
+    });
+    const semesterId = resolveSemesterId(db, input.semesterId);
+    const result = updateProposedSchedule({
+      semesterId,
+      adminId: req.user.id
+    });
+    recordScheduleOperation({
+      batchId: result.batchId,
+      semesterId,
+      operationType: 'update_schedule',
+      payload: {
+        createdNewDraft: Boolean(result.createdNewDraft),
+        addedAssignments: Number(result.addedAssignments || 0),
+        stats: result.stats
+      },
+      adminId: req.user.id
+    });
+
+    res.status(201).json({
+      message: 'Draft schedule updated incrementally',
+      semesterId,
+      ...result
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid schedule update payload', details: err.issues });
     }
     return next(err);
   }
@@ -871,15 +1076,9 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
          WHERE id = ?`
       )
       .get(semesterId);
-    const batch = db
-      .prepare(
-        `SELECT id, semester_id AS semesterId, created_at AS createdAt
-         FROM schedule_batches
-         WHERE semester_id = ? AND status = 'proposed'
-         ORDER BY created_at DESC, id DESC
-         LIMIT 1`
-      )
-      .get(semesterId);
+    const batch = getLatestProposedBatchForSemester(semesterId);
+    const compliance = getScheduleCompliance(semesterId, batch?.id || null);
+    const operations = listScheduleOperations(semesterId, batch?.id || null);
 
     const members = db
       .prepare(
@@ -912,7 +1111,10 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
           : null,
         batch: null,
         assignments: [],
-        members
+        members,
+        unsatisfiedMembers: deriveUnsatisfiedMembers(members),
+        compliance,
+        operations
       });
     }
 
@@ -943,7 +1145,10 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
         : null,
       batch,
       assignments,
-      members
+      members,
+      unsatisfiedMembers: deriveUnsatisfiedMembers(members),
+      compliance,
+      operations
     });
   } catch (err) {
     return next(err);
@@ -988,7 +1193,7 @@ router.post('/admin/scheduling/assignments', (req, res, next) => {
         .get(slot.semesterId);
 
     if (!batch) {
-      throw new HttpError(404, 'No proposed schedule batch found');
+      throw new HttpError(404, 'No draft schedule found');
     }
     if (batch.semesterId !== slot.semesterId) {
       throw new HttpError(400, 'Batch and slot are from different semesters');
@@ -1039,9 +1244,22 @@ router.post('/admin/scheduling/assignments', (req, res, next) => {
          VALUES (?, ?, ?, ?, 'proposed')`
       )
       .run(batch.id, batch.semesterId, input.userId, input.slotId);
+    const assignmentId = Number(result.lastInsertRowid);
+
+    recordScheduleOperation({
+      batchId: batch.id,
+      semesterId: batch.semesterId,
+      operationType: 'manual_assign',
+      payload: {
+        assignmentId,
+        userId: input.userId,
+        slotId: input.slotId
+      },
+      adminId: req.user.id
+    });
 
     return res.status(201).json({
-      id: Number(result.lastInsertRowid),
+      id: assignmentId,
       batchId: batch.id,
       semesterId: batch.semesterId,
       userId: input.userId,
@@ -1100,7 +1318,7 @@ router.patch('/admin/scheduling/assignments/:assignmentId', (req, res, next) => 
       )
       .get(assignment.batchId, input.slotId, assignmentId);
     if (occupied && !input.swapIfOccupied) {
-      throw new HttpError(409, 'Target slot is already occupied in this proposed batch');
+      throw new HttpError(409, 'Target slot is already occupied in the current draft schedule');
     }
 
     if (!occupied) {
@@ -1110,10 +1328,27 @@ router.patch('/admin/scheduling/assignments/:assignmentId', (req, res, next) => 
          WHERE id = ?`
       ).run(input.slotId, assignmentId);
 
+      recordScheduleOperation({
+        batchId: assignment.batchId,
+        semesterId: assignment.semesterId,
+        operationType: 'move_assignment',
+        payload: {
+          assignmentId,
+          userId: assignment.userId,
+          fromSlotId: assignment.currentSlotId,
+          toSlotId: input.slotId,
+          swapped: false
+        },
+        adminId: req.user.id
+      });
+
       return res.json({
         message: 'Assignment updated',
         assignmentId,
-        slotId: input.slotId
+        userId: assignment.userId,
+        fromSlotId: assignment.currentSlotId,
+        toSlotId: input.slotId,
+        swapped: false
       });
     }
 
@@ -1152,11 +1387,35 @@ router.patch('/admin/scheduling/assignments/:assignmentId', (req, res, next) => 
     });
     tx();
 
+    recordScheduleOperation({
+      batchId: assignment.batchId,
+      semesterId: assignment.semesterId,
+      operationType: 'swap_assignment',
+      payload: {
+        sourceAssignmentId: assignment.id,
+        sourceUserId: assignment.userId,
+        sourceFromSlotId: assignment.currentSlotId,
+        sourceToSlotId: input.slotId,
+        targetAssignmentId: occupied.id,
+        targetUserId: occupied.userId,
+        targetFromSlotId: input.slotId,
+        targetToSlotId: assignment.currentSlotId,
+        swapped: true
+      },
+      adminId: req.user.id
+    });
+
     return res.json({
       message: 'Assignment swapped',
       assignmentId,
-      slotId: input.slotId,
-      swappedWithAssignmentId: occupied.id
+      userId: assignment.userId,
+      fromSlotId: assignment.currentSlotId,
+      toSlotId: input.slotId,
+      swapped: true,
+      swappedWithAssignmentId: occupied.id,
+      swappedWithUserId: occupied.userId,
+      swappedWithFromSlotId: input.slotId,
+      swappedWithToSlotId: assignment.currentSlotId
     });
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -1175,7 +1434,12 @@ router.delete('/admin/scheduling/assignments/:assignmentId', (req, res, next) =>
 
     const assignment = db
       .prepare(
-        `SELECT sa.id
+        `SELECT
+           sa.id,
+           sa.batch_id AS batchId,
+           sa.semester_id AS semesterId,
+           sa.user_id AS userId,
+           sa.slot_id AS slotId
          FROM schedule_assignments sa
          JOIN schedule_batches sb ON sb.id = sa.batch_id
          WHERE sa.id = ? AND sb.status = 'proposed'`
@@ -1186,7 +1450,102 @@ router.delete('/admin/scheduling/assignments/:assignmentId', (req, res, next) =>
     }
 
     db.prepare('DELETE FROM schedule_assignments WHERE id = ?').run(assignmentId);
-    return res.json({ message: 'Assignment deleted', assignmentId });
+    recordScheduleOperation({
+      batchId: assignment.batchId,
+      semesterId: assignment.semesterId,
+      operationType: 'delete_assignment',
+      payload: {
+        assignmentId: assignment.id,
+        userId: assignment.userId,
+        slotId: assignment.slotId
+      },
+      adminId: req.user.id
+    });
+    return res.json({
+      message: 'Assignment deleted',
+      assignmentId,
+      deleted: assignment
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/admin/scheduling/preferences/export', (req, res, next) => {
+  try {
+    const semesterId = resolveSemesterId(db, req.query.semesterId);
+    const semester = db
+      .prepare(
+        `SELECT
+           id,
+           name,
+           start_date AS startDate,
+           end_date AS endDate
+         FROM semesters
+         WHERE id = ?`
+      )
+      .get(semesterId);
+    if (!semester) {
+      throw new HttpError(404, 'Semester not found');
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT
+           u.student_number AS studentNumber,
+           COALESCE(p.display_name, u.student_number) AS displayName,
+           rs.day_of_week AS dayOfWeek,
+           rs.hour,
+           rs.room_no AS roomNo,
+           sp.created_at AS createdAt
+         FROM slot_preferences sp
+         JOIN users u ON u.id = sp.user_id
+         LEFT JOIN profiles p ON p.user_id = u.id
+         JOIN room_slots rs ON rs.id = sp.slot_id
+         WHERE sp.semester_id = ?
+         ORDER BY u.student_number ASC, rs.day_of_week ASC, rs.hour ASC, rs.room_no ASC`
+      )
+      .all(semesterId);
+
+    const dayLabels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    const lines = [];
+    lines.push(
+      [
+        `学期: ${semester.name}`,
+        `日期: ${semester.startDate} 至 ${semester.endDate}`,
+        `偏好记录数: ${rows.length}`
+      ]
+        .map(escapeCsv)
+        .join(',')
+    );
+    lines.push(
+      ['学号', '姓名', '星期', '时间', '琴房', '提交时间']
+        .map(escapeCsv)
+        .join(',')
+    );
+
+    for (const row of rows) {
+      lines.push(
+        [
+          row.studentNumber,
+          row.displayName,
+          dayLabels[row.dayOfWeek] || row.dayOfWeek,
+          `${String(row.hour).padStart(2, '0')}:00`,
+          row.roomNo === 1 ? '大活324琴房' : '大活325琴房',
+          row.createdAt
+        ]
+          .map(escapeCsv)
+          .join(',')
+      );
+    }
+
+    const csv = `\uFEFF${lines.join('\n')}`;
+    const safeSemesterName = semester.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `linquan_preferences_${safeSemesterName}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(200).send(csv);
   } catch (err) {
     return next(err);
   }
@@ -1283,14 +1642,6 @@ router.get('/admin/scheduling/export', (req, res, next) => {
       slotMap.set(key, member);
     }
 
-    function escapeCsv(value) {
-      const text = String(value ?? '');
-      if (text.includes('"') || text.includes(',') || text.includes('\n')) {
-        return `"${text.replaceAll('"', '""')}"`;
-      }
-      return text;
-    }
-
     const lines = [];
     lines.push([
       `Semester: ${semester.name}`,
@@ -1327,10 +1678,25 @@ router.get('/admin/scheduling/export', (req, res, next) => {
 router.post('/admin/scheduling/publish', async (req, res, next) => {
   try {
     const input = publishScheduleSchema.parse({
-      batchId: Number(req.body.batchId)
+      semesterId: req.body.semesterId ? Number(req.body.semesterId) : undefined
     });
+    const semesterId = resolveSemesterId(db, input.semesterId);
+    const batch = getLatestProposedBatchForSemester(semesterId);
+    if (!batch) {
+      throw new HttpError(404, 'No draft schedule found for current semester');
+    }
+
     const publishResult = publishScheduleBatch({
-      batchId: input.batchId,
+      batchId: batch.id,
+      adminId: req.user.id
+    });
+    recordScheduleOperation({
+      batchId: batch.id,
+      semesterId,
+      operationType: 'publish_schedule',
+      payload: {
+        notifiedUsers: publishResult.userIds.length
+      },
       adminId: req.user.id
     });
 
@@ -1340,12 +1706,13 @@ router.post('/admin/scheduling/publish', async (req, res, next) => {
       content:
         '本学期琴房排班已发布，请登录系统查看你的固定时段。',
       relatedType: 'schedule_batch',
-      relatedId: input.batchId
+      relatedId: batch.id
     });
 
     res.json({
-      message: 'Schedule batch published',
+      message: 'Schedule published',
       semesterId: publishResult.semesterId,
+      batchId: batch.id,
       notification: notifyResult
     });
   } catch (err) {
@@ -1583,8 +1950,14 @@ router.get('/admin/concerts/:concertId/applications', (req, res, next) => {
            ca.user_id AS userId,
            u.student_number AS studentNumber,
            COALESCE(p.display_name, u.student_number) AS displayName,
-           ca.piece_title AS pieceTitle,
-           ca.composer,
+           ca.applicant_name AS applicantName,
+           ca.applicant_student_number AS applicantStudentNumber,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           ca.contact_qq AS contactQq,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
+           COALESCE(ca.piece_en, ca.composer) AS composer,
            ca.note,
            ca.score_file_path AS scoreFilePath,
            ca.status,
@@ -1604,6 +1977,121 @@ router.get('/admin/concerts/:concertId/applications', (req, res, next) => {
       }));
 
     return res.json({ items: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/admin/concerts/:concertId/applications/export', (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db
+      .prepare(
+        `SELECT
+           id,
+           title,
+           status
+         FROM concerts
+         WHERE id = ?`
+      )
+      .get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.concert_id AS concertId,
+           ca.user_id AS userId,
+           u.student_number AS studentNumber,
+           COALESCE(p.display_name, u.student_number) AS displayName,
+           ca.applicant_name AS applicantName,
+           ca.applicant_student_number AS applicantStudentNumber,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           ca.contact_qq AS contactQq,
+           ca.score_file_path AS scoreFilePath,
+           ca.status,
+           ca.feedback,
+           ca.created_at AS createdAt,
+           ca.updated_at AS updatedAt
+         FROM concert_applications ca
+         JOIN users u ON u.id = ca.user_id
+         LEFT JOIN profiles p ON p.user_id = u.id
+         WHERE ca.concert_id = ?
+         ORDER BY ca.created_at DESC, ca.id DESC`
+      )
+      .all(concertId)
+      .map((item) => ({
+        ...item,
+        scoreFilePath: toPublicPath(item.scoreFilePath)
+      }));
+
+    const lines = [];
+    lines.push(
+      [
+        `音乐会: ${concert.title}`,
+        `音乐会ID: ${concert.id}`,
+        `状态: ${concert.status}`,
+        `报名数量: ${rows.length}`
+      ]
+        .map(escapeCsv)
+        .join(',')
+    );
+    lines.push(
+      [
+        '报名ID',
+        '姓名',
+        '学号',
+        '曲目作者与名称（中文）',
+        '曲目作者与名称（英文）',
+        '预计时长（min）',
+        '联系方式（QQ）',
+        '状态',
+        '反馈',
+        '乐谱文件',
+        '提交时间',
+        '更新时间'
+      ]
+        .map(escapeCsv)
+        .join(',')
+    );
+
+    for (const row of rows) {
+      lines.push(
+        [
+          row.id,
+          row.applicantName || row.displayName,
+          row.applicantStudentNumber || row.studentNumber,
+          row.pieceZh || '',
+          row.pieceEn || '',
+          row.durationMin ?? '',
+          row.contactQq || '',
+          row.status || '',
+          row.feedback || '',
+          row.scoreFilePath || '',
+          row.createdAt || '',
+          row.updatedAt || ''
+        ]
+          .map(escapeCsv)
+          .join(',')
+      );
+    }
+
+    const csv = `\uFEFF${lines.join('\n')}`;
+    const safeTitle = String(concert.title || 'concert').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `linquan_concert_applications_${safeTitle}_${concert.id}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(200).send(csv);
   } catch (err) {
     return next(err);
   }

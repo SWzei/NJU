@@ -2,6 +2,11 @@
 
 Full-stack web system for NJU林泉钢琴社.
 
+## 0. Chinese Role-Based Manuals
+
+- Member guide (ZH): `docs/README_MEMBER_ZH.md`
+- Admin guide (ZH): `docs/README_ADMIN_ZH.md`
+
 It supports:
 
 - Member registration/login (student number required, email optional)

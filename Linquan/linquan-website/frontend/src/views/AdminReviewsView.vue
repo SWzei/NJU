@@ -15,7 +15,7 @@
           <select v-model.number="audition.applicationId">
             <option :value="0">{{ t('admin.noSpecificApplication') }}</option>
             <option v-for="item in applications" :key="item.id" :value="item.id">
-              {{ item.displayName }} - {{ item.pieceTitle }}
+              {{ item.displayName }} - {{ item.pieceZh || item.pieceTitle }}
             </option>
           </select>
         </div>
@@ -53,7 +53,7 @@
           <select v-model.number="result.applicationId">
             <option :value="0">{{ t('common.choose') }}</option>
             <option v-for="item in applications" :key="item.id" :value="item.id">
-              {{ item.displayName }} - {{ item.pieceTitle }}
+              {{ item.displayName }} - {{ item.pieceZh || item.pieceTitle }}
             </option>
           </select>
         </div>
@@ -88,6 +88,12 @@
         <label>&nbsp;</label>
         <button class="btn secondary" @click="loadApplications">{{ t('admin.loadRegistrations') }}</button>
       </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="btn secondary" :disabled="!selectedConcertId || exportingCsv" @click="downloadRegistrationsCsv">
+          {{ exportingCsv ? t('admin.downloading') : t('admin.downloadRegistrationsCsv') }}
+        </button>
+      </div>
     </div>
 
     <table class="app-table">
@@ -107,7 +113,7 @@
           @click="pickApplication(item)"
         >
           <td>{{ item.displayName }}</td>
-          <td>{{ item.pieceTitle }}</td>
+          <td>{{ item.pieceZh || item.pieceTitle }}</td>
           <td>{{ t(`auditionResult.${item.status}`) || item.status }}</td>
           <td>{{ item.updatedAt || '-' }}</td>
         </tr>
@@ -122,10 +128,12 @@
 
     <article class="detail-box" v-if="selectedApplication">
       <h3>{{ t('admin.registrationDetailTitle') }}</h3>
-      <p><strong>{{ t('common.student') }}:</strong> {{ selectedApplication.studentNumber }}</p>
-      <p><strong>{{ t('common.name') }}:</strong> {{ selectedApplication.displayName }}</p>
-      <p><strong>{{ t('concerts.piece') }}:</strong> {{ selectedApplication.pieceTitle }}</p>
-      <p><strong>{{ t('concerts.composer') }}:</strong> {{ selectedApplication.composer || '-' }}</p>
+      <p><strong>{{ t('common.student') }}:</strong> {{ selectedApplication.applicantStudentNumber || selectedApplication.studentNumber }}</p>
+      <p><strong>{{ t('common.name') }}:</strong> {{ selectedApplication.applicantName || selectedApplication.displayName }}</p>
+      <p><strong>{{ t('concerts.pieceZh') }}:</strong> {{ selectedApplication.pieceZh || selectedApplication.pieceTitle || '-' }}</p>
+      <p><strong>{{ t('concerts.pieceEn') }}:</strong> {{ selectedApplication.pieceEn || selectedApplication.composer || '-' }}</p>
+      <p><strong>{{ t('concerts.durationMin') }}:</strong> {{ selectedApplication.durationMin || '-' }}</p>
+      <p><strong>{{ t('concerts.contactQq') }}:</strong> {{ selectedApplication.contactQq || '-' }}</p>
       <p><strong>{{ t('common.status') }}:</strong> {{ t(`auditionResult.${selectedApplication.status}`) || selectedApplication.status }}</p>
       <p>
         <strong>{{ t('concerts.scoreFile') }}:</strong>
@@ -134,10 +142,6 @@
         </a>
         <span v-else>{{ t('concerts.noScoreFile') }}</span>
       </p>
-      <div class="detail-field">
-        <strong>{{ t('concerts.note') }}:</strong>
-        <pre>{{ selectedApplication.note || '-' }}</pre>
-      </div>
       <div class="detail-field">
         <strong>{{ t('common.feedback') }}:</strong>
         <pre>{{ selectedApplication.feedback || '-' }}</pre>
@@ -159,6 +163,7 @@ const selectedConcertId = ref(0);
 const selectedApplicationId = ref(0);
 const applications = ref([]);
 const loadingApplications = ref(false);
+const exportingCsv = ref(false);
 
 const audition = reactive({
   concertId: 0,
@@ -194,6 +199,18 @@ function setMessage(text) {
 
 function setError(err) {
   showError(err, t('admin.errorRequest'));
+}
+
+function parseFileName(contentDisposition, fallback) {
+  if (!contentDisposition) {
+    return fallback;
+  }
+  const utfMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    return decodeURIComponent(utfMatch[1]);
+  }
+  const plainMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return plainMatch?.[1] || fallback;
 }
 
 async function loadConcerts() {
@@ -289,6 +306,35 @@ async function publishResult() {
     await loadApplications();
   } catch (err) {
     setError(err);
+  }
+}
+
+async function downloadRegistrationsCsv() {
+  if (!selectedConcertId.value) {
+    showError(t('admin.concertRequired'));
+    return;
+  }
+  exportingCsv.value = true;
+  try {
+    const response = await api.get(`/admin/concerts/${selectedConcertId.value}/applications/export`, {
+      responseType: 'blob'
+    });
+    const fallbackName = `linquan_concert_applications_${selectedConcertId.value}.csv`;
+    const fileName = parseFileName(response.headers['content-disposition'], fallbackName);
+    const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    setMessage(t('admin.registrationCsvExported'));
+  } catch (err) {
+    setError(err?.response?.data?.message || t('admin.registrationCsvExportFailed'));
+  } finally {
+    exportingCsv.value = false;
   }
 }
 

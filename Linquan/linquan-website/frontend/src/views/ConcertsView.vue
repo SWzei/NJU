@@ -41,16 +41,35 @@
           </select>
         </div>
         <div class="field">
-          <label>{{ t('concerts.pieceTitle') }}</label>
-          <input v-model.trim="pieceTitle" required :placeholder="t('concerts.pieceTitlePlaceholder')" />
+          <label>{{ t('common.name') }}</label>
+          <input v-model.trim="applicantName" required :placeholder="t('concerts.applicantNamePlaceholder')" />
         </div>
         <div class="field">
-          <label>{{ t('concerts.composer') }}</label>
-          <input v-model.trim="composer" :placeholder="t('concerts.composerPlaceholder')" />
+          <label>{{ t('common.student') }}</label>
+          <input
+            v-model.trim="applicantStudentNumber"
+            required
+            readonly
+            :placeholder="t('concerts.applicantStudentNumberPlaceholder')"
+          />
         </div>
         <div class="field">
-          <label>{{ t('concerts.note') }}</label>
-          <textarea v-model.trim="note" :placeholder="t('concerts.notePlaceholder')" />
+          <label>{{ t('concerts.pieceZh') }}</label>
+          <input v-model.trim="pieceZh" required :placeholder="t('concerts.pieceZhPlaceholder')" />
+        </div>
+        <div class="field">
+          <label>{{ t('concerts.pieceEn') }}</label>
+          <input v-model.trim="pieceEn" required :placeholder="t('concerts.pieceEnPlaceholder')" />
+        </div>
+        <div class="row">
+          <div class="field field-half">
+            <label>{{ t('concerts.durationMin') }}</label>
+            <input type="number" min="1" max="180" v-model.number="durationMin" required />
+          </div>
+          <div class="field field-half">
+            <label>{{ t('concerts.contactQq') }}</label>
+            <input v-model.trim="contactQq" required :placeholder="t('concerts.contactQqPlaceholder')" />
+          </div>
         </div>
         <div class="field">
           <label>{{ t('concerts.scoreFile') }}</label>
@@ -64,9 +83,12 @@
       <article class="current-application" v-if="myApplication">
         <h3>{{ t('concerts.currentApplicationTitle') }}</h3>
         <p class="subtle">{{ t('concerts.currentApplicationHint') }}</p>
-        <p><strong>{{ t('concerts.piece') }}:</strong> {{ myApplication.pieceTitle }}</p>
-        <p><strong>{{ t('concerts.composer') }}:</strong> {{ myApplication.composer || '-' }}</p>
-        <p><strong>{{ t('concerts.note') }}:</strong> {{ myApplication.note || '-' }}</p>
+        <p><strong>{{ t('common.name') }}:</strong> {{ myApplication.applicantName || '-' }}</p>
+        <p><strong>{{ t('common.student') }}:</strong> {{ myApplication.applicantStudentNumber || '-' }}</p>
+        <p><strong>{{ t('concerts.pieceZh') }}:</strong> {{ myApplication.pieceZh || myApplication.pieceTitle || '-' }}</p>
+        <p><strong>{{ t('concerts.pieceEn') }}:</strong> {{ myApplication.pieceEn || '-' }}</p>
+        <p><strong>{{ t('concerts.durationMin') }}:</strong> {{ myApplication.durationMin || '-' }}</p>
+        <p><strong>{{ t('concerts.contactQq') }}:</strong> {{ myApplication.contactQq || '-' }}</p>
         <p>
           <strong>{{ t('concerts.scoreFile') }}:</strong>
           <a
@@ -137,6 +159,7 @@ import { onMounted, ref, watch } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
+import { useAuthStore } from '@/stores/auth';
 
 const concerts = ref([]);
 const selectedConcertId = ref(0);
@@ -144,14 +167,18 @@ const auditions = ref([]);
 const results = ref(null);
 const myApplication = ref(null);
 
-const pieceTitle = ref('');
-const composer = ref('');
-const note = ref('');
+const applicantName = ref('');
+const applicantStudentNumber = ref('');
+const pieceZh = ref('');
+const pieceEn = ref('');
+const durationMin = ref(5);
+const contactQq = ref('');
 const scoreFile = ref(null);
 
 const submitting = ref(false);
 const { t, locale } = useI18n();
 const { showSuccess, showError } = useToast();
+const auth = useAuthStore();
 
 function formatDate(value) {
   return value
@@ -193,6 +220,17 @@ async function loadConcerts() {
   }
 }
 
+async function loadIdentity() {
+  try {
+    const { data } = await api.get('/profiles/me');
+    applicantName.value = data?.displayName || auth.user?.studentNumber || '';
+    applicantStudentNumber.value = data?.studentNumber || auth.user?.studentNumber || '';
+  } catch (err) {
+    applicantName.value = auth.user?.studentNumber || '';
+    applicantStudentNumber.value = auth.user?.studentNumber || '';
+  }
+}
+
 async function loadAuditionsAndResults() {
   if (!selectedConcertId.value) {
     auditions.value = [];
@@ -210,14 +248,19 @@ async function loadAuditionsAndResults() {
   myApplication.value = myApplicationRes.data.item || null;
 
   if (myApplication.value) {
-    pieceTitle.value = myApplication.value.pieceTitle || '';
-    composer.value = myApplication.value.composer || '';
-    note.value = myApplication.value.note || '';
+    applicantName.value = myApplication.value.applicantName || applicantName.value || '';
+    applicantStudentNumber.value =
+      myApplication.value.applicantStudentNumber || applicantStudentNumber.value || '';
+    pieceZh.value = myApplication.value.pieceZh || myApplication.value.pieceTitle || '';
+    pieceEn.value = myApplication.value.pieceEn || '';
+    durationMin.value = Number(myApplication.value.durationMin || 5);
+    contactQq.value = myApplication.value.contactQq || '';
     scoreFile.value = null;
   } else {
-    pieceTitle.value = '';
-    composer.value = '';
-    note.value = '';
+    pieceZh.value = '';
+    pieceEn.value = '';
+    durationMin.value = 5;
+    contactQq.value = '';
     scoreFile.value = null;
   }
 }
@@ -233,9 +276,12 @@ async function submitApplication() {
   submitting.value = true;
   try {
     const formData = new FormData();
-    formData.append('pieceTitle', pieceTitle.value);
-    formData.append('composer', composer.value);
-    formData.append('note', note.value);
+    formData.append('applicantName', applicantName.value);
+    formData.append('applicantStudentNumber', applicantStudentNumber.value);
+    formData.append('pieceZh', pieceZh.value);
+    formData.append('pieceEn', pieceEn.value);
+    formData.append('durationMin', String(durationMin.value || ''));
+    formData.append('contactQq', contactQq.value);
     if (scoreFile.value) {
       formData.append('scoreFile', scoreFile.value);
     }
@@ -262,6 +308,7 @@ watch(selectedConcertId, async () => {
 
 onMounted(async () => {
   try {
+    await loadIdentity();
     await loadConcerts();
     await loadAuditionsAndResults();
   } catch (err) {
@@ -314,6 +361,10 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+}
+
+.field-half {
+  flex: 1;
 }
 
 .section-space {

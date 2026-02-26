@@ -64,7 +64,7 @@ function scoreSecondAssignment(slotId, slotDemand, slotMeta, existingAssignments
   return demandWeight + adjacencyBonus;
 }
 
-export function generateProposedSchedule({ semesterId, adminId }) {
+function loadScheduleContext(semesterId) {
   const slotRows = db
     .prepare(
       'SELECT id, room_no, day_of_week, hour FROM room_slots WHERE semester_id = ? ORDER BY day_of_week, hour, room_no'
@@ -101,13 +101,38 @@ export function generateProposedSchedule({ semesterId, adminId }) {
   }
 
   const memberPrefs = buildMemberPreferenceMap(members, preferences, validSlotIds);
-  const availableSlots = new Set(slotRows.map((slot) => slot.id));
-  const assignmentsByUser = new Map(members.map((member) => [member.user_id, []]));
 
-  // Phase 1: fairness-first, maximize users who get at least one slot.
+  return {
+    slotRows,
+    members,
+    memberPrefs,
+    slotMeta,
+    slotDemand
+  };
+}
+
+function createAssignmentMap(members) {
+  return new Map(members.map((member) => [member.user_id, []]));
+}
+
+function addAssignmentsFromRows(assignmentsByUser, rows) {
+  const occupiedSlotIds = new Set();
+  for (const row of rows) {
+    const userAssignments = assignmentsByUser.get(row.user_id);
+    if (!userAssignments) {
+      continue;
+    }
+    if (!userAssignments.includes(row.slot_id)) {
+      userAssignments.push(row.slot_id);
+      occupiedSlotIds.add(row.slot_id);
+    }
+  }
+  return occupiedSlotIds;
+}
+
+function runPhaseOne({ members, memberPrefs, availableSlots, slotDemand, assignmentsByUser }) {
   const phase1Members = [...members].sort((a, b) => {
-    const prefDiff =
-      memberPrefs.get(a.user_id).size - memberPrefs.get(b.user_id).size;
+    const prefDiff = memberPrefs.get(a.user_id).size - memberPrefs.get(b.user_id).size;
     if (prefDiff !== 0) {
       return prefDiff;
     }
@@ -115,20 +140,32 @@ export function generateProposedSchedule({ semesterId, adminId }) {
   });
 
   for (const member of phase1Members) {
+    const assigned = assignmentsByUser.get(member.user_id) || [];
+    if (assigned.length >= 1) {
+      continue;
+    }
     const preferred = memberPrefs.get(member.user_id);
     const candidates = [...preferred].filter((slotId) => availableSlots.has(slotId));
     if (candidates.length === 0) {
       continue;
     }
     const chosenSlotId = chooseLowestDemandSlot(candidates, slotDemand);
-    assignmentsByUser.get(member.user_id).push(chosenSlotId);
+    assigned.push(chosenSlotId);
     availableSlots.delete(chosenSlotId);
   }
+}
 
-  // Phase 2: assign a second slot where possible to improve utilization.
+function runPhaseTwo({ members, memberPrefs, availableSlots, slotDemand, slotMeta, assignmentsByUser }) {
   const phase2Members = [...members].sort((a, b) => {
-    const remainingA = [...memberPrefs.get(a.user_id)].filter((slotId) => availableSlots.has(slotId)).length;
-    const remainingB = [...memberPrefs.get(b.user_id)].filter((slotId) => availableSlots.has(slotId)).length;
+    const assignedA = assignmentsByUser.get(a.user_id) || [];
+    const assignedB = assignmentsByUser.get(b.user_id) || [];
+
+    const remainingA = [...memberPrefs.get(a.user_id)].filter(
+      (slotId) => availableSlots.has(slotId) && !assignedA.includes(slotId)
+    ).length;
+    const remainingB = [...memberPrefs.get(b.user_id)].filter(
+      (slotId) => availableSlots.has(slotId) && !assignedB.includes(slotId)
+    ).length;
     if (remainingA !== remainingB) {
       return remainingA - remainingB;
     }
@@ -136,7 +173,7 @@ export function generateProposedSchedule({ semesterId, adminId }) {
   });
 
   for (const member of phase2Members) {
-    const assigned = assignmentsByUser.get(member.user_id);
+    const assigned = assignmentsByUser.get(member.user_id) || [];
     if (assigned.length === 0 || assigned.length >= 2) {
       continue;
     }
@@ -153,16 +190,57 @@ export function generateProposedSchedule({ semesterId, adminId }) {
     assigned.push(chosenSlotId);
     availableSlots.delete(chosenSlotId);
   }
+}
 
-  const flatAssignments = [];
+function flattenAssignments(assignmentsByUser) {
+  const rows = [];
   for (const [userId, slots] of assignmentsByUser.entries()) {
     for (const slotId of slots) {
-      flatAssignments.push({ userId, slotId });
+      rows.push({ userId, slotId });
     }
   }
+  return rows;
+}
 
+function summarizeAssignments({ assignmentsByUser, totalMembers, totalSlots }) {
   const membersWithAtLeastOne = [...assignmentsByUser.values()].filter((slots) => slots.length >= 1).length;
   const membersWithTwo = [...assignmentsByUser.values()].filter((slots) => slots.length >= 2).length;
+  const totalAssignments = [...assignmentsByUser.values()].reduce((sum, slots) => sum + slots.length, 0);
+  return {
+    totalMembers,
+    membersWithAtLeastOne,
+    membersWithTwo,
+    unassignedMembers: totalMembers - membersWithAtLeastOne,
+    totalAssignments,
+    totalSlots,
+    utilization: totalSlots > 0 ? totalAssignments / totalSlots : 0
+  };
+}
+
+export function generateProposedSchedule({ semesterId, adminId }) {
+  const context = loadScheduleContext(semesterId);
+  const { slotRows, members, memberPrefs, slotMeta, slotDemand } = context;
+
+  const assignmentsByUser = createAssignmentMap(members);
+  const availableSlots = new Set(slotRows.map((slot) => slot.id));
+
+  runPhaseOne({
+    members,
+    memberPrefs,
+    availableSlots,
+    slotDemand,
+    assignmentsByUser
+  });
+  runPhaseTwo({
+    members,
+    memberPrefs,
+    availableSlots,
+    slotDemand,
+    slotMeta,
+    assignmentsByUser
+  });
+
+  const flatAssignments = flattenAssignments(assignmentsByUser);
 
   const tx = db.transaction(() => {
     const oldProposedBatches = db
@@ -201,13 +279,103 @@ export function generateProposedSchedule({ semesterId, adminId }) {
 
   return {
     batchId,
-    stats: {
+    stats: summarizeAssignments({
+      assignmentsByUser,
       totalMembers: members.length,
-      membersWithAtLeastOne,
-      membersWithTwo,
-      unassignedMembers: members.length - membersWithAtLeastOne,
-      totalAssignments: flatAssignments.length
-    }
+      totalSlots: slotRows.length
+    })
+  };
+}
+
+export function updateProposedSchedule({ semesterId, adminId }) {
+  const context = loadScheduleContext(semesterId);
+  const { slotRows, members, memberPrefs, slotMeta, slotDemand } = context;
+
+  const latestProposedBatch = db
+    .prepare(
+      `SELECT id
+       FROM schedule_batches
+       WHERE semester_id = ? AND status = 'proposed'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    )
+    .get(semesterId);
+
+  if (!latestProposedBatch) {
+    return {
+      ...generateProposedSchedule({ semesterId, adminId }),
+      createdNewDraft: true,
+      addedAssignments: 0
+    };
+  }
+
+  const batchId = latestProposedBatch.id;
+  const existingAssignmentRows = db
+    .prepare(
+      `SELECT user_id, slot_id
+       FROM schedule_assignments
+       WHERE batch_id = ?`
+    )
+    .all(batchId);
+
+  const assignmentsByUser = createAssignmentMap(members);
+  const occupiedSlotIds = addAssignmentsFromRows(assignmentsByUser, existingAssignmentRows);
+  const availableSlots = new Set(slotRows.map((slot) => slot.id));
+  for (const slotId of occupiedSlotIds) {
+    availableSlots.delete(slotId);
+  }
+
+  const beforeSet = new Set(existingAssignmentRows.map((item) => `${item.user_id}-${item.slot_id}`));
+
+  runPhaseOne({
+    members,
+    memberPrefs,
+    availableSlots,
+    slotDemand,
+    assignmentsByUser
+  });
+  runPhaseTwo({
+    members,
+    memberPrefs,
+    availableSlots,
+    slotDemand,
+    slotMeta,
+    assignmentsByUser
+  });
+
+  const afterRows = flattenAssignments(assignmentsByUser).map((item) => ({
+    user_id: item.userId,
+    slot_id: item.slotId
+  }));
+  const addedRows = afterRows.filter((item) => !beforeSet.has(`${item.user_id}-${item.slot_id}`));
+
+  if (addedRows.length > 0) {
+    const insertAssignment = db.prepare(
+      `INSERT INTO schedule_assignments (batch_id, semester_id, user_id, slot_id, status)
+       VALUES (?, ?, ?, ?, 'proposed')`
+    );
+    const tx = db.transaction(() => {
+      for (const row of addedRows) {
+        insertAssignment.run(batchId, semesterId, row.user_id, row.slot_id);
+      }
+      db.prepare(
+        `UPDATE schedule_batches
+         SET note = ?, created_by = COALESCE(created_by, ?)
+         WHERE id = ?`
+      ).run('Updated by incremental fill', adminId || null, batchId);
+    });
+    tx();
+  }
+
+  return {
+    batchId,
+    createdNewDraft: false,
+    addedAssignments: addedRows.length,
+    stats: summarizeAssignments({
+      assignmentsByUser,
+      totalMembers: members.length,
+      totalSlots: slotRows.length
+    })
   };
 }
 
@@ -221,7 +389,7 @@ export function publishScheduleBatch({ batchId, adminId }) {
     throw new HttpError(404, 'Schedule batch not found');
   }
   if (batch.status !== 'proposed') {
-    throw new HttpError(400, 'Only proposed batches can be published');
+    throw new HttpError(400, 'Only draft schedules can be published');
   }
 
   const tx = db.transaction(() => {

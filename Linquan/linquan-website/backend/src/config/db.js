@@ -104,6 +104,30 @@ ensureColumn('profiles', 'academy', 'TEXT');
 ensureColumn('profiles', 'hobbies', 'TEXT');
 ensureColumn('profiles', 'piano_interests', 'TEXT');
 ensureColumn('profiles', 'wechat_account', 'TEXT');
+ensureColumn('concert_applications', 'applicant_name', 'TEXT');
+ensureColumn('concert_applications', 'applicant_student_number', 'TEXT');
+ensureColumn('concert_applications', 'piece_zh', 'TEXT');
+ensureColumn('concert_applications', 'piece_en', 'TEXT');
+ensureColumn('concert_applications', 'duration_min', 'INTEGER');
+ensureColumn('concert_applications', 'contact_qq', 'TEXT');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schedule_operation_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER,
+    semester_id INTEGER,
+    operation_type TEXT NOT NULL,
+    payload_json TEXT,
+    created_by INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (batch_id) REFERENCES schedule_batches(id) ON DELETE SET NULL,
+    FOREIGN KEY (semester_id) REFERENCES semesters(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+  )
+`);
+db.exec(
+  'CREATE INDEX IF NOT EXISTS idx_schedule_operation_logs_batch_time ON schedule_operation_logs(batch_id, created_at DESC, id DESC)'
+);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS gallery_items (
