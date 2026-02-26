@@ -58,6 +58,17 @@ function inferInsertId(rows) {
   return Number.isNaN(numeric) ? firstValue : numeric;
 }
 
+function isTransientConnectionError(err) {
+  const text = String(err?.message || '').toLowerCase();
+  return (
+    text.includes('connection terminated unexpectedly') ||
+    text.includes('connection reset') ||
+    text.includes('econnreset') ||
+    text.includes('etimedout') ||
+    text.includes('socket hang up')
+  );
+}
+
 class PostgresPreparedStatement {
   constructor(db, sourceSql) {
     this.db = db;
@@ -213,6 +224,21 @@ class PostgresCompatDb {
   }
 
   _dispatch(rawSql, params, mode) {
+    try {
+      return this._dispatchOnce(rawSql, params, mode);
+    } catch (err) {
+      if (!isTransientConnectionError(err)) {
+        throw err;
+      }
+
+      // One automatic retry for transient network/connection errors.
+      this.workerReady = false;
+      this._ensureWorker();
+      return this._dispatchOnce(rawSql, params, mode);
+    }
+  }
+
+  _dispatchOnce(rawSql, params, mode) {
     this._ensureWorker();
 
     const { sql, placeholderCount } = normalizeSqlText(rawSql);
