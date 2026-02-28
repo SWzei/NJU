@@ -6,6 +6,7 @@ Full-stack web system for NJU林泉钢琴社.
 
 - Member guide (ZH): `docs/README_MEMBER_ZH.md`
 - Admin guide (ZH): `docs/README_ADMIN_ZH.md`
+- Alibaba ECS deployment guide (ZH): `docs/DEPLOY_ALIYUN_ZH.md`
 
 It supports:
 
@@ -48,6 +49,7 @@ linquan-website/
 │   └── settings.json              # Formatting/lint/editor defaults
 ├── backend/
 │   ├── package.json
+│   ├── ecosystem.config.cjs        # PM2 production config for ECS
 │   ├── requests.http              # REST Client examples
 │   └── src/
 │       ├── app.js                 # Express app and route mounting
@@ -76,6 +78,16 @@ linquan-website/
 │           └── httpError.js
 ├── database/
 │   └── schema.sql                 # Table/index definitions
+├── deploy/
+│   └── aliyun/
+│       ├── 01_init_server.sh      # Ubuntu initialization script
+│       ├── 02_setup_postgres.sh   # PostgreSQL setup script
+│       ├── 03_deploy_app.sh       # First deployment script
+│       ├── 04_setup_nginx.sh      # Nginx reverse proxy setup
+│       ├── 05_enable_https.sh     # Let's Encrypt setup
+│       ├── 06_update_app.sh       # Rolling update script
+│       ├── nginx-linquan.conf     # Nginx site template
+│       └── .env.backend.aliyun.example
 ├── frontend/
 │   ├── package.json
 │   ├── .eslintrc.cjs
@@ -262,7 +274,37 @@ The project now supports single-service deployment:
 
 This means one public URL can host both frontend pages and backend APIs.
 
-### 10.1 Render Deployment (Recommended)
+### 10.1 Alibaba Cloud ECS (Ubuntu 22.04, Recommended for Self-Hosting)
+
+This repository now includes deployment assets under `deploy/aliyun/`:
+
+1. Initialize server (system, Node.js 20, PM2, Nginx, UFW):
+   - `bash deploy/aliyun/01_init_server.sh`
+2. Setup PostgreSQL:
+   - `DB_NAME=linquan DB_USER=linquan_app DB_PASS='<strong-password>' bash deploy/aliyun/02_setup_postgres.sh`
+3. Deploy app:
+   - `REPO_URL=<repo-url> BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/03_deploy_app.sh`
+4. Configure Nginx reverse proxy:
+   - `SERVER_NAME=<ip-or-domain> NODE_PORT=3000 PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/04_setup_nginx.sh`
+5. Enable HTTPS after domain DNS + ICP are ready:
+   - `DOMAIN=linquanpiano.cn EMAIL=<your-email> bash deploy/aliyun/05_enable_https.sh`
+6. Update later:
+   - `BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/06_update_app.sh`
+
+Production env template:
+
+- `deploy/aliyun/.env.backend.aliyun.example`
+
+Deployment directory mapping:
+
+- `/var/www/linquan/backend` -> project backend
+- `/var/www/linquan/frontend` -> project frontend
+
+Reference manual (Chinese):
+
+- `docs/DEPLOY_ALIYUN_ZH.md`
+
+### 10.2 Render Deployment
 
 This repo includes `render.yaml`.
 
@@ -282,7 +324,7 @@ This repo includes `render.yaml`.
 - `DATABASE_URL` must be provided (Neon).
 - `UPLOAD_ROOT=uploads` is ephemeral on free instances. Use object storage (S3/Cloudinary/B2) for persistent uploads.
 
-### 10.2 Other Platforms (Railway/Fly.io/VM)
+### 10.3 Other Platforms (Railway/Fly.io/VM)
 
 Use the same runtime pattern:
 
@@ -302,7 +344,7 @@ Use the same runtime pattern:
 
 For long-term production with heavier traffic, consider migrating DB from SQLite to PostgreSQL.
 
-### 10.3 SQLite -> Neon Migration Notes
+### 10.4 SQLite -> Neon Migration Notes
 
 Recommended migration path:
 

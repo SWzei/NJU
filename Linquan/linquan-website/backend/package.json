@@ -7,6 +7,8 @@
     "dev": "nodemon src/server.js",
     "build": "npm --prefix ../frontend install --include=dev && npm --prefix ../frontend run build",
     "start": "node src/server.js",
+    "start:pm2": "pm2 start ecosystem.config.cjs --env production --update-env",
+    "reload:pm2": "pm2 reload ecosystem.config.cjs --update-env",
     "db:init": "node src/scripts/initDb.js",
     "seed:test-members": "node src/scripts/seedTestMembers.js"
   },
