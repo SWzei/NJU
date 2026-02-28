@@ -195,28 +195,46 @@ function getScheduleCompliance(semesterId, batchId) {
 function listScheduleOperations(semesterId, batchId, limit = 60) {
   let rows = [];
   try {
-    rows = db
-      .prepare(
-        `SELECT
-           id,
-           batch_id AS batchId,
-           semester_id AS semesterId,
-           operation_type AS operationType,
-           payload_json AS payloadJson,
-           created_by AS createdBy,
-           created_at AS createdAt
-         FROM schedule_operation_logs
-         WHERE semester_id = ?
-           AND (? IS NULL OR batch_id = ?)
-         ORDER BY id DESC
-         LIMIT ?`
-      )
-      .all(semesterId, batchId ?? null, batchId ?? null, limit);
-  } catch (err) {
-    const message = String(err?.message || '');
-    if (!/schedule_operation_logs|no such table|relation .* does not exist/i.test(message)) {
-      throw err;
+    if (batchId === null || batchId === undefined) {
+      rows = db
+        .prepare(
+          `SELECT
+             id,
+             batch_id AS batchId,
+             semester_id AS semesterId,
+             operation_type AS operationType,
+             payload_json AS payloadJson,
+             created_by AS createdBy,
+             created_at AS createdAt
+           FROM schedule_operation_logs
+           WHERE semester_id = ?
+           ORDER BY id DESC
+           LIMIT ?`
+        )
+        .all(semesterId, limit);
+    } else {
+      rows = db
+        .prepare(
+          `SELECT
+             id,
+             batch_id AS batchId,
+             semester_id AS semesterId,
+             operation_type AS operationType,
+             payload_json AS payloadJson,
+             created_by AS createdBy,
+             created_at AS createdAt
+           FROM schedule_operation_logs
+           WHERE semester_id = ?
+             AND batch_id = ?
+           ORDER BY id DESC
+           LIMIT ?`
+        )
+        .all(semesterId, batchId, limit);
     }
+  } catch (err) {
+    // Never block scheduling UI due to operation-log read issues.
+    // eslint-disable-next-line no-console
+    console.warn('schedule_operation_logs read failed:', err?.message || err);
     rows = [];
   }
 
