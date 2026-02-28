@@ -276,12 +276,18 @@ async function submitApplication() {
   submitting.value = true;
   try {
     const formData = new FormData();
-    formData.append('applicantName', applicantName.value);
-    formData.append('applicantStudentNumber', applicantStudentNumber.value);
-    formData.append('pieceZh', pieceZh.value);
-    formData.append('pieceEn', pieceEn.value);
-    formData.append('durationMin', String(durationMin.value || ''));
-    formData.append('contactQq', contactQq.value);
+    const safeStudentNumber = applicantStudentNumber.value || auth.user?.studentNumber || '';
+    const safePieceZh = pieceZh.value || '';
+    const safePieceEn = pieceEn.value || safePieceZh || 'N/A';
+    const safeDurationMin = Number(durationMin.value) > 0 ? Number(durationMin.value) : 5;
+    const safeContactQq = contactQq.value || '0000';
+
+    formData.append('applicantName', applicantName.value || auth.user?.studentNumber || 'member');
+    formData.append('applicantStudentNumber', safeStudentNumber);
+    formData.append('pieceZh', safePieceZh);
+    formData.append('pieceEn', safePieceEn);
+    formData.append('durationMin', String(safeDurationMin));
+    formData.append('contactQq', safeContactQq);
     if (scoreFile.value) {
       formData.append('scoreFile', scoreFile.value);
     }

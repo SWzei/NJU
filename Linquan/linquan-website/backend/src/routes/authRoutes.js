@@ -80,9 +80,12 @@ router.post('/register', (req, res, next) => {
       .prepare(
         `SELECT id, student_number, email, role
          FROM users
-         WHERE id = ?`
+         WHERE student_number = ?`
       )
-      .get(userId);
+      .get(input.studentNumber);
+    if (!user) {
+      throw new HttpError(500, 'Registered user cannot be loaded');
+    }
 
     const token = signToken(user);
     res.status(201).json({

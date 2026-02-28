@@ -141,6 +141,56 @@ function ensureSqliteRuntimeSchema(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_gallery_items_order ON gallery_items(display_order, id)');
 }
 
+function ensurePostgresRuntimeSchema(db) {
+  db.exec(`
+    ALTER TABLE concerts ADD COLUMN IF NOT EXISTS attachment_path TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS photo_url TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS academy TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS hobbies TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS piano_interests TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS wechat_account TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_name TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_student_number TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_zh TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_en TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS duration_min INTEGER;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS contact_qq TEXT;
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schedule_operation_logs (
+      id SERIAL PRIMARY KEY,
+      batch_id INTEGER,
+      semester_id INTEGER,
+      operation_type TEXT NOT NULL,
+      payload_json TEXT,
+      created_by INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedule_operation_logs_batch_time
+      ON schedule_operation_logs(batch_id, created_at DESC, id DESC);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gallery_items (
+      id SERIAL PRIMARY KEY,
+      src TEXT NOT NULL,
+      fallback TEXT,
+      title_zh TEXT NOT NULL,
+      title_en TEXT NOT NULL,
+      description_zh TEXT,
+      description_en TEXT,
+      alt_zh TEXT,
+      alt_en TEXT,
+      is_visible INTEGER NOT NULL DEFAULT 1,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_gallery_items_order ON gallery_items(display_order, id);
+  `);
+}
+
 function seedGalleryIfEmpty(db) {
   const galleryCount = db.prepare('SELECT COUNT(*) AS count FROM gallery_items').get()?.count || 0;
   if (Number(galleryCount) > 0) {
@@ -195,10 +245,11 @@ function createDb() {
     console.log('Using Postgres database (DATABASE_URL detected).');
 
     try {
+      ensurePostgresRuntimeSchema(pgDb);
       seedGalleryIfEmpty(pgDb);
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('Postgres gallery bootstrap skipped:', err.message);
+      console.warn('Postgres runtime migration skipped:', err.message);
     }
 
     return pgDb;

@@ -175,9 +175,14 @@ router.post(
           currentUserInfo.studentNumber
         ),
         pieceZh: firstValue(req.body.pieceZh, req.body.pieceTitle),
-        pieceEn: firstValue(req.body.pieceEn, req.body.composer),
-        durationMin: firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes),
-        contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq)
+        pieceEn:
+          firstValue(req.body.pieceEn, req.body.composer)
+          || firstValue(req.body.pieceZh, req.body.pieceTitle)
+          || 'N/A',
+        durationMin:
+          firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes)
+          || 5,
+        contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq) || '0000'
       });
       if (input.applicantStudentNumber !== currentUserInfo.studentNumber) {
         throw new HttpError(400, 'Student number does not match current account');
