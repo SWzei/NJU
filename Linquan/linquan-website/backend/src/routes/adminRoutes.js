@@ -193,23 +193,32 @@ function getScheduleCompliance(semesterId, batchId) {
 }
 
 function listScheduleOperations(semesterId, batchId, limit = 60) {
-  const rows = db
-    .prepare(
-      `SELECT
-         id,
-         batch_id AS batchId,
-         semester_id AS semesterId,
-         operation_type AS operationType,
-         payload_json AS payloadJson,
-         created_by AS createdBy,
-         created_at AS createdAt
-       FROM schedule_operation_logs
-       WHERE semester_id = ?
-         AND (? IS NULL OR batch_id = ?)
-       ORDER BY id DESC
-       LIMIT ?`
-    )
-    .all(semesterId, batchId ?? null, batchId ?? null, limit);
+  let rows = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT
+           id,
+           batch_id AS batchId,
+           semester_id AS semesterId,
+           operation_type AS operationType,
+           payload_json AS payloadJson,
+           created_by AS createdBy,
+           created_at AS createdAt
+         FROM schedule_operation_logs
+         WHERE semester_id = ?
+           AND (? IS NULL OR batch_id = ?)
+         ORDER BY id DESC
+         LIMIT ?`
+      )
+      .all(semesterId, batchId ?? null, batchId ?? null, limit);
+  } catch (err) {
+    const message = String(err?.message || '');
+    if (!/schedule_operation_logs|no such table|relation .* does not exist/i.test(message)) {
+      throw err;
+    }
+    rows = [];
+  }
 
   return rows.map((item) => {
     let payload = null;
@@ -234,17 +243,26 @@ function recordScheduleOperation({
   payload = null,
   adminId = null
 }) {
-  db.prepare(
-    `INSERT INTO schedule_operation_logs (
-       batch_id, semester_id, operation_type, payload_json, created_by
-     ) VALUES (?, ?, ?, ?, ?)`
-  ).run(
-    batchId,
-    semesterId,
-    operationType,
-    payload ? JSON.stringify(payload) : null,
-    adminId
-  );
+  try {
+    db.prepare(
+      `INSERT INTO schedule_operation_logs (
+         batch_id, semester_id, operation_type, payload_json, created_by
+       ) VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      batchId,
+      semesterId,
+      operationType,
+      payload ? JSON.stringify(payload) : null,
+      adminId
+    );
+  } catch (err) {
+    const message = String(err?.message || '');
+    if (!/schedule_operation_logs|no such table|relation .* does not exist/i.test(message)) {
+      throw err;
+    }
+    // eslint-disable-next-line no-console
+    console.warn('schedule_operation_logs is unavailable, skip operation record.');
+  }
 }
 
 function deriveUnsatisfiedMembers(members) {

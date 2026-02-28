@@ -174,7 +174,10 @@ router.post(
           req.body.studentNumber,
           currentUserInfo.studentNumber
         ),
-        pieceZh: firstValue(req.body.pieceZh, req.body.pieceTitle),
+        pieceZh:
+          firstValue(req.body.pieceZh, req.body.pieceTitle)
+          || firstValue(req.body.pieceEn, req.body.composer)
+          || '未命名曲目',
         pieceEn:
           firstValue(req.body.pieceEn, req.body.composer)
           || firstValue(req.body.pieceZh, req.body.pieceTitle)
