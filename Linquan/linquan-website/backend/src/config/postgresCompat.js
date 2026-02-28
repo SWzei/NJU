@@ -58,6 +58,49 @@ function inferInsertId(rows) {
   return Number.isNaN(numeric) ? firstValue : numeric;
 }
 
+function extractCamelCaseAliasMap(rawSql) {
+  const aliasMap = new Map();
+  const pattern = /\bAS\s+(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))/gi;
+  let match = pattern.exec(rawSql);
+  while (match) {
+    const unquotedAlias = match[2];
+    if (unquotedAlias && /[A-Z]/.test(unquotedAlias)) {
+      aliasMap.set(unquotedAlias.toLowerCase(), unquotedAlias);
+    }
+    match = pattern.exec(rawSql);
+  }
+  return aliasMap;
+}
+
+function normalizeResponseRows(rows, aliasMap) {
+  if (!Array.isArray(rows) || rows.length === 0 || aliasMap.size === 0) {
+    return rows || [];
+  }
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object') {
+      return row;
+    }
+
+    let patched = null;
+    for (const [pgKey, wantedKey] of aliasMap.entries()) {
+      if (!Object.prototype.hasOwnProperty.call(row, pgKey)) {
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(row, wantedKey)) {
+        continue;
+      }
+      if (!patched) {
+        patched = { ...row };
+      }
+      patched[wantedKey] = patched[pgKey];
+      delete patched[pgKey];
+    }
+
+    return patched || row;
+  });
+}
+
 function isTransientConnectionError(err) {
   const text = String(err?.message || '').toLowerCase();
   return (
@@ -200,27 +243,32 @@ class PostgresCompatDb {
     }
 
     const response = this._dispatch(querySql, params, mode);
+    const aliasMap = extractCamelCaseAliasMap(querySql);
+    const normalizedResponse = {
+      ...response,
+      rows: normalizeResponseRows(response.rows, aliasMap)
+    };
 
     if (mode === 'all') {
-      return response.rows;
+      return normalizedResponse.rows;
     }
 
     if (mode === 'get') {
-      return response.rows[0];
+      return normalizedResponse.rows[0];
     }
 
     if (mode === 'run') {
       const result = {
-        changes: response.rowCount
+        changes: normalizedResponse.rowCount
       };
-      const insertId = inferInsertId(response.rows);
+      const insertId = inferInsertId(normalizedResponse.rows);
       if (insertId !== undefined) {
         result.lastInsertRowid = insertId;
       }
       return result;
     }
 
-    return response;
+    return normalizedResponse;
   }
 
   _dispatch(rawSql, params, mode) {

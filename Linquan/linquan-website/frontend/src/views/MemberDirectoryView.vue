@@ -72,11 +72,15 @@ const galleryItems = computed(() => {
     id: item.id,
     src: item.src,
     fallback: item.fallback || '',
-    title: useZh ? (item.titleZh || item.titleEn || '') : (item.titleEn || item.titleZh || ''),
+    title: useZh
+      ? (item.titleZh || item.titlezh || item.titleEn || item.titleen || '')
+      : (item.titleEn || item.titleen || item.titleZh || item.titlezh || ''),
     description: useZh
-      ? (item.descriptionZh || item.descriptionEn || '')
-      : (item.descriptionEn || item.descriptionZh || ''),
-    alt: useZh ? (item.altZh || item.altEn || '') : (item.altEn || item.altZh || '')
+      ? (item.descriptionZh || item.descriptionzh || item.descriptionEn || item.descriptionen || '')
+      : (item.descriptionEn || item.descriptionen || item.descriptionZh || item.descriptionzh || ''),
+    alt: useZh
+      ? (item.altZh || item.altzh || item.altEn || item.alten || '')
+      : (item.altEn || item.alten || item.altZh || item.altzh || '')
   }));
 });
 
@@ -111,8 +115,14 @@ onMounted(async () => {
 
   try {
     const { data } = await api.get('/gallery');
-    remoteGalleryItems.value = data.items || [];
-    remoteGalleryLoaded.value = true;
+    const rows = data.items || [];
+    if (rows.length > 0) {
+      remoteGalleryItems.value = rows;
+      remoteGalleryLoaded.value = true;
+    } else {
+      remoteGalleryItems.value = [];
+      remoteGalleryLoaded.value = false;
+    }
   } catch (err) {
     remoteGalleryLoaded.value = false;
   }

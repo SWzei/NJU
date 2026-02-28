@@ -153,9 +153,7 @@ async function uploadAvatarIfNeeded() {
   }
   const formData = new FormData();
   formData.append('avatar', avatarFile.value);
-  const uploadRes = await api.post('/profiles/me/avatar', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  });
+  const uploadRes = await api.post('/profiles/me/avatar', formData);
   form.avatarUrl = uploadRes.data.avatarUrl || form.avatarUrl;
 }
 
@@ -165,9 +163,7 @@ async function uploadPhotoIfNeeded() {
   }
   const formData = new FormData();
   formData.append('photo', photoFile.value);
-  const uploadRes = await api.post('/profiles/me/photo', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  });
+  const uploadRes = await api.post('/profiles/me/photo', formData);
   form.photoUrl = uploadRes.data.photoUrl || form.photoUrl;
 }
 

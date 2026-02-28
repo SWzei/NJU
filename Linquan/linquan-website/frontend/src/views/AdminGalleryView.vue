@@ -233,11 +233,7 @@ function onPreviewError(event, fallback) {
 async function uploadGalleryFile(file) {
   const formData = new FormData();
   formData.append('imageFile', file);
-  const { data } = await api.post('/admin/gallery/upload', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data'
-    }
-  });
+  const { data } = await api.post('/admin/gallery/upload', formData);
   return data?.src || '';
 }
 

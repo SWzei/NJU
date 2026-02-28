@@ -286,9 +286,7 @@ async function submitApplication() {
       formData.append('scoreFile', scoreFile.value);
     }
 
-    await api.post(`/concerts/${selectedConcertId.value}/applications`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
+    await api.post(`/concerts/${selectedConcertId.value}/applications`, formData);
     showSuccess(t('concerts.submitSuccess'));
     await loadAuditionsAndResults();
   } catch (err) {

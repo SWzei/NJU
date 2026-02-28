@@ -59,14 +59,34 @@ const upload = multer({
   }
 });
 
+const trimmedString = (min, max) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() : value),
+    z.string().min(min).max(max)
+  );
+
 const applicationSchema = z.object({
-  applicantName: z.string().min(1).max(80),
-  applicantStudentNumber: z.string().min(3).max(32),
-  pieceZh: z.string().min(1).max(240),
-  pieceEn: z.string().min(1).max(320),
+  applicantName: trimmedString(1, 80),
+  applicantStudentNumber: trimmedString(3, 32),
+  pieceZh: trimmedString(1, 240),
+  pieceEn: trimmedString(1, 320),
   durationMin: z.coerce.number().int().min(1).max(180),
-  contactQq: z.string().min(4).max(32)
+  contactQq: trimmedString(4, 32)
 });
+
+function firstValue(...values) {
+  for (const item of values) {
+    if (item === undefined || item === null) {
+      continue;
+    }
+    const text = typeof item === 'string' ? item.trim() : item;
+    if (text === '') {
+      continue;
+    }
+    return text;
+  }
+  return undefined;
+}
 
 function toPublicPath(rawPath) {
   if (!rawPath) {
@@ -144,12 +164,20 @@ router.post(
       }
 
       const input = applicationSchema.parse({
-        applicantName: req.body.applicantName || currentUserInfo.displayName,
-        applicantStudentNumber: req.body.applicantStudentNumber || currentUserInfo.studentNumber,
-        pieceZh: req.body.pieceZh,
-        pieceEn: req.body.pieceEn,
-        durationMin: req.body.durationMin,
-        contactQq: req.body.contactQq
+        applicantName: firstValue(
+          req.body.applicantName,
+          req.body.displayName,
+          currentUserInfo.displayName
+        ),
+        applicantStudentNumber: firstValue(
+          req.body.applicantStudentNumber,
+          req.body.studentNumber,
+          currentUserInfo.studentNumber
+        ),
+        pieceZh: firstValue(req.body.pieceZh, req.body.pieceTitle),
+        pieceEn: firstValue(req.body.pieceEn, req.body.composer),
+        durationMin: firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes),
+        contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq)
       });
       if (input.applicantStudentNumber !== currentUserInfo.studentNumber) {
         throw new HttpError(400, 'Student number does not match current account');

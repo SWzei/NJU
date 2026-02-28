@@ -249,9 +249,7 @@ async function createConcert() {
   }
   try {
     const payload = buildFormData(createForm, createAttachmentFile.value, false);
-    const { data } = await api.post('/admin/concerts', payload, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
+    const { data } = await api.post('/admin/concerts', payload);
     setMessage(t('admin.concertCreated', { id: data.id }));
     createForm.title = '';
     createForm.description = '';
@@ -276,9 +274,7 @@ async function saveConcert() {
   }
   try {
     const payload = buildFormData(editForm, editAttachmentFile.value, removeAttachment.value);
-    await api.patch(`/admin/concerts/${selectedConcert.value.id}`, payload, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
+    await api.patch(`/admin/concerts/${selectedConcert.value.id}`, payload);
     setMessage(t('admin.concertUpdated'));
     await loadConcerts();
   } catch (err) {
