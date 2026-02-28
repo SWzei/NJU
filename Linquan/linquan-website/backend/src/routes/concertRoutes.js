@@ -66,12 +66,12 @@ const trimmedString = (min, max) =>
   );
 
 const applicationSchema = z.object({
-  applicantName: trimmedString(1, 80),
-  applicantStudentNumber: trimmedString(3, 32),
-  pieceZh: trimmedString(1, 240),
-  pieceEn: trimmedString(1, 320),
-  durationMin: z.coerce.number().int().min(1).max(180),
-  contactQq: trimmedString(4, 32)
+  applicantName: trimmedString(1, 80).optional(),
+  applicantStudentNumber: trimmedString(1, 32).optional(),
+  pieceZh: trimmedString(1, 240).optional(),
+  pieceEn: trimmedString(1, 320).optional(),
+  durationMin: z.coerce.number().min(0).max(999).optional(),
+  contactQq: trimmedString(1, 64).optional()
 });
 
 function firstValue(...values) {
@@ -86,6 +86,34 @@ function firstValue(...values) {
     return text;
   }
   return undefined;
+}
+
+function normalizeDurationMin(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.min(180, Math.max(1, Math.round(numeric)));
+    }
+  }
+  return 5;
+}
+
+function normalizeContactQq(...values) {
+  const selected = firstValue(...values);
+  if (selected === undefined || selected === null) {
+    return '0000';
+  }
+  const text = String(selected).trim();
+  if (!text) {
+    return '0000';
+  }
+  if (text.length >= 4) {
+    return text.slice(0, 32);
+  }
+  return text.padEnd(4, '0');
 }
 
 function toPublicPath(rawPath) {
@@ -163,30 +191,43 @@ router.post(
         throw new HttpError(404, 'Current user not found');
       }
 
-      const input = applicationSchema.parse({
+      const parsed = applicationSchema.parse({
         applicantName: firstValue(
           req.body.applicantName,
-          req.body.displayName,
-          currentUserInfo.displayName
+          req.body.displayName
         ),
         applicantStudentNumber: firstValue(
           req.body.applicantStudentNumber,
-          req.body.studentNumber,
-          currentUserInfo.studentNumber
+          req.body.studentNumber
         ),
+        pieceZh: firstValue(req.body.pieceZh, req.body.pieceTitle),
+        pieceEn: firstValue(req.body.pieceEn, req.body.composer),
+        durationMin: firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes),
+        contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq)
+      });
+
+      const input = {
+        applicantName:
+          firstValue(parsed.applicantName, currentUserInfo.displayName, currentUserInfo.studentNumber, 'member')
+          || currentUserInfo.studentNumber,
+        applicantStudentNumber:
+          firstValue(parsed.applicantStudentNumber, currentUserInfo.studentNumber)
+          || currentUserInfo.studentNumber,
         pieceZh:
-          firstValue(req.body.pieceZh, req.body.pieceTitle)
-          || firstValue(req.body.pieceEn, req.body.composer)
+          firstValue(parsed.pieceZh, parsed.pieceEn, req.body.pieceTitle, req.body.composer, '未命名曲目')
           || '未命名曲目',
         pieceEn:
-          firstValue(req.body.pieceEn, req.body.composer)
-          || firstValue(req.body.pieceZh, req.body.pieceTitle)
+          firstValue(parsed.pieceEn, parsed.pieceZh, req.body.composer, req.body.pieceTitle, 'N/A')
           || 'N/A',
-        durationMin:
-          firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes)
-          || 5,
-        contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq) || '0000'
-      });
+        durationMin: normalizeDurationMin(
+          parsed.durationMin,
+          req.body.durationMin,
+          req.body.duration,
+          req.body.durationMinutes
+        ),
+        contactQq: normalizeContactQq(parsed.contactQq, req.body.contactQq, req.body.contact, req.body.qq)
+      };
+
       if (input.applicantStudentNumber !== currentUserInfo.studentNumber) {
         throw new HttpError(400, 'Student number does not match current account');
       }
