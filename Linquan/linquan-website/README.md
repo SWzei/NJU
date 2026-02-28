@@ -129,7 +129,9 @@ linquan-website/
 │           ├── AdminPublishingView.vue
 │           ├── AdminSchedulingView.vue
 │           ├── AdminConcertsView.vue
-│           └── AdminReviewsView.vue
+│           ├── AdminReviewsView.vue
+│           ├── AdminGalleryView.vue
+│           └── AdminMembersView.vue
 ├── .editorconfig
 ├── render.yaml                    # Render blueprint (public deployment)
 ├── .env.example                   # Backend env template
@@ -257,6 +259,7 @@ Backend (`backend/`):
 - `npm run build` - install frontend deps and build `frontend/dist`
 - `npm run start` - start backend without nodemon
 - `npm run db:init` - apply schema and seed default admin/semester
+- `npm run test:smoke` - run backend + core API smoke test
 
 Frontend (`frontend/`):
 
@@ -303,6 +306,169 @@ Deployment directory mapping:
 Reference manual (Chinese):
 
 - `docs/DEPLOY_ALIYUN_ZH.md`
+
+### 10.1.1 Alibaba ECS Full Production Runbook (ZH, current online practice)
+
+This section records the full workflow that has been verified in your real deployment.
+
+Server baseline (current online):
+
+- Cloud: Alibaba Cloud ECS
+- Public IP: `139.196.227.208`
+- OS: Ubuntu LTS (current machine shows Ubuntu 24.04; this workflow is also compatible with 22.04)
+- Runtime: Nginx + PM2 + Node.js + PostgreSQL (local, `127.0.0.1`)
+
+Step A. Connect and initialize server:
+
+1. SSH login:
+   - `ssh root@139.196.227.208`
+2. Base packages:
+   - `apt update && apt upgrade -y`
+   - `apt install -y curl git unzip build-essential ufw nginx`
+3. Node.js + PM2:
+   - `curl -fsSL https://deb.nodesource.com/setup_20.x | bash -`
+   - `apt install -y nodejs`
+   - `npm install -g pm2`
+
+Step B. Security groups / firewall:
+
+Open these ports both in Alibaba Cloud console and local firewall:
+
+- `22` (SSH)
+- `80` (HTTP)
+- `443` (HTTPS)
+- `3000` (Node, usually internal/proxy only)
+
+UFW commands:
+
+- `ufw allow 22`
+- `ufw allow 80`
+- `ufw allow 443`
+- `ufw allow 3000`
+- `ufw enable`
+
+Step C. Deploy code to server:
+
+1. Prepare directory and clone:
+   - `mkdir -p /var/www/linquan/repo`
+   - `cd /var/www/linquan/repo`
+   - `git clone https://github.com/SWzei/NJU.git`
+2. Enter project:
+   - `cd /var/www/linquan/repo/NJU/Linquan/linquan-website`
+
+Step D. Configure PostgreSQL:
+
+1. Install and start:
+   - `apt install -y postgresql`
+   - `systemctl enable postgresql && systemctl start postgresql`
+2. Create DB/user (example):
+   - `sudo -u postgres psql`
+   - `CREATE DATABASE linquan;`
+   - `CREATE USER linquan_app WITH PASSWORD 'your_password';`
+   - `GRANT ALL PRIVILEGES ON DATABASE linquan TO linquan_app;`
+   - `\q`
+3. Verify connection:
+   - `PGPASSWORD='your_password' psql -h 127.0.0.1 -U linquan_app -d linquan -c "select now();"`
+
+Step E. Configure backend `.env`:
+
+File location:
+
+- `/var/www/linquan/repo/NJU/Linquan/linquan-website/backend/.env`
+
+Recommended production core fields:
+
+- `HOST=127.0.0.1`
+- `PORT=3000`
+- `NODE_ENV=production`
+- `SERVE_FRONTEND=true`
+- `JWT_SECRET=<strong-random-secret>`
+- `ALLOWED_ORIGINS=https://linquanpiano.cn,https://www.linquanpiano.cn`
+- `DATABASE_URL=postgresql://linquan_app:<password>@127.0.0.1:5432/linquan?sslmode=disable`
+- `UPLOAD_ROOT=/var/www/linquan/uploads`
+
+Quick check:
+
+- `grep -E '^(HOST|PORT|NODE_ENV|SERVE_FRONTEND|JWT_SECRET|ALLOWED_ORIGINS|DATABASE_URL|UPLOAD_ROOT)=' .env`
+
+Step F. Build and start service:
+
+1. Install and build:
+   - `cd /var/www/linquan/repo/NJU/Linquan/linquan-website/backend`
+   - `npm install`
+   - `npm run build`
+2. Start/restart with PM2:
+   - `pm2 start ecosystem.config.cjs --env production --update-env || pm2 restart linquan-backend --update-env`
+   - `pm2 save`
+3. Health check:
+   - `curl -fsS http://127.0.0.1:3000/api/health`
+4. Process/log check:
+   - `pm2 status`
+   - `pm2 logs linquan-backend --lines 120 --nostream`
+
+Step G. Configure Nginx reverse proxy:
+
+1. Create site file:
+   - `/etc/nginx/sites-available/linquan`
+2. Minimal config:
+
+```nginx
+server {
+  listen 80;
+  server_name 139.196.227.208 linquanpiano.cn www.linquanpiano.cn;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+3. Enable and reload:
+   - `rm -f /etc/nginx/sites-enabled/default`
+   - `ln -sfn /etc/nginx/sites-available/linquan /etc/nginx/sites-enabled/linquan`
+   - `nginx -t && systemctl reload nginx`
+4. Verify:
+   - `curl -H 'Host: 139.196.227.208' http://127.0.0.1/api/health`
+   - `curl http://139.196.227.208/api/health`
+
+Step H. Public access and runtime behavior:
+
+- Public URL (IP mode): `http://139.196.227.208`
+- Domain mode (recommended): bind DNS to server IP and use `https://linquanpiano.cn`
+- Exiting SSH will not stop website. PM2 + systemd-managed services keep running.
+
+Step I. Frequent real-world issues and fixes:
+
+1. `curl: (7) Failed to connect ...:3000` immediately after PM2 restart:
+   - usually startup race condition; retry after 1-3 seconds
+   - use loop health check:
+   - `for i in $(seq 1 45); do curl -fsS http://127.0.0.1:3000/api/health && break; sleep 1; done`
+2. Nginx `/api/health` returns 404:
+   - default site not removed or custom site not enabled
+   - run:
+   - `rm -f /etc/nginx/sites-enabled/default`
+   - `ln -sfn /etc/nginx/sites-available/linquan /etc/nginx/sites-enabled/linquan`
+   - `nginx -t && systemctl reload nginx`
+3. `git pull --rebase` blocked by local changes:
+   - `git stash push -u -m "temp-before-sync-$(date +%F-%H%M%S)"`
+   - `git -c http.version=HTTP/1.1 pull --rebase origin main`
+4. `GnuTLS recv error (-110)` while pulling:
+   - retry with HTTP/1.1:
+   - `git -c http.version=HTTP/1.1 pull --rebase origin main`
+
+Step J. Recommended post-deploy acceptance:
+
+1. `curl http://127.0.0.1:3000/api/health`
+2. `curl http://139.196.227.208/api/health`
+3. Register a member account and login
+4. Submit concert application
+5. Open admin scheduling page and ensure no 500 error
+6. Verify uploads can be accessed under `/uploads/...`
 
 ### 10.2 Render Deployment
 
@@ -376,22 +542,48 @@ Public/member:
 - `GET /api/scheduling/my-assignment`
 - `GET /api/concerts`
 - `POST /api/concerts/:concertId/applications`
+- `GET /api/concerts/:concertId/my-application`
 - `GET /api/concerts/:concertId/auditions`
 - `GET /api/concerts/:concertId/results`
+- `GET /api/gallery`
 
 Admin:
 
 - `POST /api/admin/activities`
+- `GET /api/admin/activities`
+- `PATCH /api/admin/activities/:activityId`
+- `DELETE /api/admin/activities/:activityId`
 - `POST /api/admin/announcements`
+- `GET /api/admin/announcements`
+- `PATCH /api/admin/announcements/:announcementId`
+- `DELETE /api/admin/announcements/:announcementId`
 - `POST /api/admin/semesters`
 - `POST /api/admin/scheduling/run`
+- `POST /api/admin/scheduling/update`
 - `GET /api/admin/scheduling/proposed`
+- `POST /api/admin/scheduling/assignments`
 - `PATCH /api/admin/scheduling/assignments/:assignmentId`
+- `DELETE /api/admin/scheduling/assignments/:assignmentId`
+- `GET /api/admin/scheduling/export`
+- `GET /api/admin/scheduling/preferences/export`
 - `POST /api/admin/scheduling/publish`
 - `POST /api/admin/concerts`
+- `GET /api/admin/concerts`
+- `PATCH /api/admin/concerts/:concertId`
 - `PATCH /api/admin/concerts/:concertId/status`
+- `GET /api/admin/concerts/:concertId/applications`
+- `GET /api/admin/concerts/:concertId/applications/export`
 - `POST /api/admin/concerts/:concertId/auditions`
 - `POST /api/admin/concerts/:concertId/results`
+- `GET /api/admin/gallery`
+- `POST /api/admin/gallery/upload`
+- `POST /api/admin/gallery`
+- `PATCH /api/admin/gallery/:itemId`
+- `DELETE /api/admin/gallery/:itemId`
+- `GET /api/admin/members`
+- `GET /api/admin/members/:userId`
+- `POST /api/admin/members/:userId/reset-password`
+- `DELETE /api/admin/members/:userId`
 
 Health check:
 
@@ -477,6 +669,48 @@ For deployed Render service:
 1. `git push` updates deployment source branch.
 2. If Auto-Deploy is enabled, Render redeploys automatically.
 3. If Auto-Deploy is disabled, use Render manual deploy after push.
+
+### 12.6 ECS Production Update Commands (Recommended)
+
+For your current Alibaba ECS deployment, use this command sequence:
+
+```bash
+cd /var/www/linquan/repo/NJU/Linquan/linquan-website
+git -c http.version=HTTP/1.1 pull --rebase origin main
+
+cd backend
+npm install
+npm run build
+
+pm2 restart linquan-backend --update-env
+pm2 save
+
+for i in $(seq 1 45); do
+  if curl -fsS http://127.0.0.1:3000/api/health >/dev/null; then
+    echo "health ok"
+    break
+  fi
+  sleep 1
+done
+
+curl -fsS http://127.0.0.1:3000/api/health
+nginx -t && systemctl reload nginx
+```
+
+If `git pull --rebase` is blocked by local changes:
+
+```bash
+git stash push -u -m "temp-before-sync-$(date +%F-%H%M%S)"
+git -c http.version=HTTP/1.1 pull --rebase origin main
+```
+
+If you want to inspect current backend status quickly:
+
+```bash
+pm2 status
+pm2 logs linquan-backend --lines 120 --nostream
+ss -ltnp | grep :3000
+```
 
 ## 13. How to Restart Cleanly
 
@@ -584,3 +818,81 @@ How to update photos:
 2. Reuse the recommended file names in `frontend/public/photos/README.md` to avoid code changes.
 3. If you need new cards or captions, edit `frontend/src/content/photoManifest.js`.
 4. Update bilingual captions in `frontend/src/i18n/index.js` under `dashboard.*`.
+
+## 17. Recent Updates (2026-02)
+
+This section summarizes the latest functional and deployment updates that were completed recently.
+
+### 17.1 Admin: Member Account Management (new)
+
+Added a dedicated admin page for member account operations:
+
+- Frontend page: `frontend/src/views/AdminMembersView.vue`
+- Admin route: `/admin/members`
+- Admin navigation entry added in `AdminLayoutView`
+
+Supported operations:
+
+- Search/view member basic info
+- View account identifier and stored password hash
+- Reset member password (manual input or auto-generated temporary password)
+- Delete/deactivate member account
+
+Backend APIs added:
+
+- `GET /api/admin/members`
+- `GET /api/admin/members/:userId`
+- `POST /api/admin/members/:userId/reset-password`
+- `DELETE /api/admin/members/:userId`
+
+### 17.2 Concert Application Robustness Fix
+
+The recurring error `Invalid application payload` was fixed in `backend/src/routes/concertRoutes.js`.
+
+Main improvements:
+
+- More tolerant payload parsing and fallback mapping
+- Better compatibility for legacy field names
+- Numeric normalization for duration (e.g. decimal or missing values)
+- QQ/contact normalization to avoid hard-fail on short/empty inputs
+- Keeps strict account binding on student number match for security
+
+Verification status:
+
+- `npm run test:smoke` passed
+- Additional focused concert-application compatibility smoke test passed
+
+### 17.3 Scheduling Stability Improvements (Postgres mode)
+
+Admin scheduling interfaces were hardened to avoid UI blocking when operation logs are temporarily unavailable.
+
+Updates include:
+
+- safer read path for schedule operation logs
+- fail-open behavior for non-critical operation-log insert/read errors
+- admin scheduling proposed endpoint no longer crashes due logging-table edge cases
+
+### 17.4 Alibaba ECS Deployment Stabilization
+
+Production deployment on Alibaba ECS was stabilized with:
+
+- PM2 process persistence (`pm2 save`)
+- Nginx reverse proxy correction (remove default site, enable custom `linquan` site)
+- startup race handling in health checks (retry loop after PM2 restart)
+- production update workflow standardized in this README (Section 12.6)
+
+### 17.5 Homepage Hero Image Switch
+
+Homepage hero image source was updated in:
+
+- `frontend/src/content/photoManifest.js`
+
+Current behavior:
+
+- Primary: original piano-themed hero image URL
+- Fallback: local file `frontend/public/photos/hero/home-hero.jpg`
+
+### 17.6 Current Known Non-Blocking Warnings
+
+Frontend build shows webpack asset size warnings because several photo assets are large.
+This does not block deployment or runtime, but image compression is recommended for faster first load.
