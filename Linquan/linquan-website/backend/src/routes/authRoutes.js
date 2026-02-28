@@ -17,7 +17,7 @@ const registerSchema = z.object({
     .or(z.literal(''))
     .transform((value) => (value ? value : null)),
   password: z.string().min(6).max(128),
-  displayName: z.string().min(1).max(64).optional().or(z.literal('')).transform((value) => value || null)
+  displayName: z.string().trim().min(1).max(64)
 });
 
 const loginSchema = z.object({

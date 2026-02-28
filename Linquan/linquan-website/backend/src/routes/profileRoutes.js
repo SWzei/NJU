@@ -66,17 +66,17 @@ router.get('/profiles', (req, res) => {
     .prepare(
       `SELECT
          u.id,
-         u.student_number AS studentNumber,
-         p.display_name AS displayName,
-         p.avatar_url AS avatarUrl,
-         p.photo_url AS photoUrl,
+         u.student_number AS "studentNumber",
+         p.display_name AS "displayName",
+         p.avatar_url AS "avatarUrl",
+         p.photo_url AS "photoUrl",
          p.bio,
          p.grade,
          p.major,
          p.academy,
          p.hobbies,
-         p.piano_interests AS pianoInterests,
-         p.wechat_account AS wechatAccount
+         p.piano_interests AS "pianoInterests",
+         p.wechat_account AS "wechatAccount"
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
        WHERE u.role = 'member'
@@ -92,19 +92,19 @@ router.get('/profiles/me', authenticate, (req, res) => {
     .prepare(
       `SELECT
          u.id,
-         u.student_number AS studentNumber,
+         u.student_number AS "studentNumber",
          u.email,
          u.role,
-         p.display_name AS displayName,
-         p.avatar_url AS avatarUrl,
-         p.photo_url AS photoUrl,
+         p.display_name AS "displayName",
+         p.avatar_url AS "avatarUrl",
+         p.photo_url AS "photoUrl",
          p.bio,
          p.grade,
          p.major,
          p.academy,
          p.hobbies,
-         p.piano_interests AS pianoInterests,
-         p.wechat_account AS wechatAccount,
+         p.piano_interests AS "pianoInterests",
+         p.wechat_account AS "wechatAccount",
          p.phone
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
@@ -126,19 +126,19 @@ router.get('/profiles/:userId(\\d+)', authenticate, (req, res, next) => {
       .prepare(
         `SELECT
            u.id,
-           u.student_number AS studentNumber,
-           p.display_name AS displayName,
-           p.avatar_url AS avatarUrl,
-           p.photo_url AS photoUrl,
+           u.student_number AS "studentNumber",
+           p.display_name AS "displayName",
+           p.avatar_url AS "avatarUrl",
+           p.photo_url AS "photoUrl",
            p.bio,
            p.grade,
            p.major,
            p.academy,
            p.hobbies,
-           p.piano_interests AS pianoInterests,
-           p.wechat_account AS wechatAccount,
+           p.piano_interests AS "pianoInterests",
+           p.wechat_account AS "wechatAccount",
            p.phone,
-           p.updated_at AS updatedAt
+           p.updated_at AS "updatedAt"
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
          WHERE u.id = ? AND u.role = 'member'`
@@ -292,18 +292,18 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
       .prepare(
         `SELECT
            u.id,
-           u.student_number AS studentNumber,
+           u.student_number AS "studentNumber",
            u.email,
-           p.display_name AS displayName,
-           p.avatar_url AS avatarUrl,
-           p.photo_url AS photoUrl,
+           p.display_name AS "displayName",
+           p.avatar_url AS "avatarUrl",
+           p.photo_url AS "photoUrl",
            p.bio,
            p.grade,
            p.major,
            p.academy,
            p.hobbies,
-           p.piano_interests AS pianoInterests,
-           p.wechat_account AS wechatAccount,
+           p.piano_interests AS "pianoInterests",
+           p.wechat_account AS "wechatAccount",
            p.phone
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id

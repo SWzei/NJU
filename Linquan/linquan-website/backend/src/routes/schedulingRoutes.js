@@ -22,11 +22,11 @@ router.get('/scheduling/slots', (req, res, next) => {
       .prepare(
         `SELECT
            rs.id,
-           rs.room_no AS roomNo,
-           rs.day_of_week AS dayOfWeek,
+           rs.room_no AS "roomNo",
+           rs.day_of_week AS "dayOfWeek",
            rs.hour,
-           COALESCE(pref_counts.count, 0) AS selectedCount,
-           CASE WHEN my_pref.id IS NULL THEN 0 ELSE 1 END AS selectedByMe
+           COALESCE(pref_counts.count, 0) AS "selectedCount",
+           CASE WHEN my_pref.id IS NULL THEN 0 ELSE 1 END AS "selectedByMe"
          FROM room_slots rs
          LEFT JOIN (
            SELECT slot_id, COUNT(*) AS count
@@ -127,8 +127,8 @@ router.get('/scheduling/my-assignment', (req, res, next) => {
       .prepare(
         `SELECT
            sa.id,
-           rs.room_no AS roomNo,
-           rs.day_of_week AS dayOfWeek,
+           rs.room_no AS "roomNo",
+           rs.day_of_week AS "dayOfWeek",
            rs.hour
          FROM schedule_assignments sa
          JOIN room_slots rs ON rs.id = sa.slot_id

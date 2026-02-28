@@ -14,7 +14,7 @@
       </div>
       <div class="field">
         <label>{{ t('register.displayName') }}</label>
-        <input v-model.trim="displayName" :placeholder="t('register.displayNamePlaceholder')" />
+        <input v-model.trim="displayName" required :placeholder="t('register.displayNamePlaceholder')" />
       </div>
       <div class="field">
         <label>{{ t('register.password') }}</label>
