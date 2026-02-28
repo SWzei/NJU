@@ -1,7 +1,9 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import multer from 'multer';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import db from '../config/db.js';
 import { UPLOAD_ROOT } from '../config/env.js';
@@ -116,6 +118,29 @@ function escapeCsv(value) {
     return `"${text.replaceAll('"', '""')}"`;
   }
   return text;
+}
+
+function parsePositiveInt(value, fieldName) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new HttpError(400, `Invalid ${fieldName}`);
+  }
+  return number;
+}
+
+function isForeignKeyConstraintError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return message.includes('foreign key') || message.includes('violates foreign key constraint');
+}
+
+function generateTemporaryPassword(length = 10) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
+  const bytes = crypto.randomBytes(length);
+  let result = '';
+  for (let index = 0; index < length; index += 1) {
+    result += alphabet[bytes[index] % alphabet.length];
+  }
+  return result;
 }
 
 function getLatestProposedBatchForSemester(semesterId) {
@@ -417,7 +442,225 @@ const updateGalleryItemSchema = z.object({
   displayOrder: z.number().int().min(0).optional()
 });
 
+const resetMemberPasswordSchema = z.object({
+  newPassword: z.string().min(6).max(128).optional()
+});
+
 router.use(authenticate, requireRole('admin'));
+
+router.get('/admin/members', (req, res, next) => {
+  try {
+    const keyword = optionalString(req.query.keyword);
+    let rows = [];
+
+    if (keyword) {
+      const likeKeyword = `%${keyword.toLowerCase()}%`;
+      rows = db
+        .prepare(
+          `SELECT
+             u.id,
+             u.student_number AS studentNumber,
+             u.email,
+             u.password_hash AS passwordHash,
+             u.role,
+             u.created_at AS createdAt,
+             u.updated_at AS updatedAt,
+             p.display_name AS displayName,
+             p.academy,
+             p.major,
+             p.grade
+           FROM users u
+           LEFT JOIN profiles p ON p.user_id = u.id
+           WHERE u.role = 'member'
+             AND (
+               LOWER(u.student_number) LIKE ?
+               OR LOWER(COALESCE(u.email, '')) LIKE ?
+               OR LOWER(COALESCE(p.display_name, '')) LIKE ?
+               OR LOWER(COALESCE(p.academy, '')) LIKE ?
+               OR LOWER(COALESCE(p.major, '')) LIKE ?
+             )
+           ORDER BY u.id DESC`
+        )
+        .all(likeKeyword, likeKeyword, likeKeyword, likeKeyword, likeKeyword);
+    } else {
+      rows = db
+        .prepare(
+          `SELECT
+             u.id,
+             u.student_number AS studentNumber,
+             u.email,
+             u.password_hash AS passwordHash,
+             u.role,
+             u.created_at AS createdAt,
+             u.updated_at AS updatedAt,
+             p.display_name AS displayName,
+             p.academy,
+             p.major,
+             p.grade
+           FROM users u
+           LEFT JOIN profiles p ON p.user_id = u.id
+           WHERE u.role = 'member'
+           ORDER BY u.id DESC`
+        )
+        .all();
+    }
+
+    res.json({
+      items: rows,
+      total: rows.length
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/admin/members/:userId(\\d+)', (req, res, next) => {
+  try {
+    const userId = parsePositiveInt(req.params.userId, 'userId');
+    const member = db
+      .prepare(
+        `SELECT
+           u.id,
+           u.student_number AS studentNumber,
+           u.email,
+           u.password_hash AS passwordHash,
+           u.role,
+           u.created_at AS createdAt,
+           u.updated_at AS updatedAt,
+           p.display_name AS displayName,
+           p.avatar_url AS avatarUrl,
+           p.photo_url AS photoUrl,
+           p.bio,
+           p.grade,
+           p.major,
+           p.academy,
+           p.hobbies,
+           p.piano_interests AS pianoInterests,
+           p.wechat_account AS wechatAccount,
+           p.phone
+         FROM users u
+         LEFT JOIN profiles p ON p.user_id = u.id
+         WHERE u.id = ? AND u.role = 'member'
+         LIMIT 1`
+      )
+      .get(userId);
+
+    if (!member) {
+      throw new HttpError(404, 'Member account not found');
+    }
+
+    const preferenceCount = Number(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM slot_preferences WHERE user_id = ?')
+        .get(userId)?.count || 0
+    );
+    const assignmentCount = Number(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM schedule_assignments WHERE user_id = ?')
+        .get(userId)?.count || 0
+    );
+    const applicationCount = Number(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM concert_applications WHERE user_id = ?')
+        .get(userId)?.count || 0
+    );
+
+    res.json({
+      ...member,
+      preferenceCount,
+      assignmentCount,
+      applicationCount
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/members/:userId(\\d+)/reset-password', (req, res, next) => {
+  try {
+    const userId = parsePositiveInt(req.params.userId, 'userId');
+    const input = resetMemberPasswordSchema.parse({
+      newPassword: optionalString(req.body?.newPassword) || undefined
+    });
+
+    const targetMember = db
+      .prepare(
+        `SELECT
+           id,
+           student_number AS studentNumber,
+           role
+         FROM users
+         WHERE id = ?`
+      )
+      .get(userId);
+
+    if (!targetMember) {
+      throw new HttpError(404, 'Member account not found');
+    }
+    if (targetMember.role !== 'member') {
+      throw new HttpError(403, 'Only member accounts can be managed here');
+    }
+
+    const temporaryPassword = input.newPassword || generateTemporaryPassword(10);
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 10);
+    db.prepare(
+      `UPDATE users
+       SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(passwordHash, userId);
+
+    res.json({
+      userId,
+      studentNumber: targetMember.studentNumber,
+      temporaryPassword
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid password payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.delete('/admin/members/:userId(\\d+)', (req, res, next) => {
+  try {
+    const userId = parsePositiveInt(req.params.userId, 'userId');
+    const targetMember = db
+      .prepare(
+        `SELECT
+           id,
+           student_number AS studentNumber,
+           role
+         FROM users
+         WHERE id = ?`
+      )
+      .get(userId);
+
+    if (!targetMember) {
+      throw new HttpError(404, 'Member account not found');
+    }
+    if (targetMember.role !== 'member') {
+      throw new HttpError(403, 'Only member accounts can be deleted here');
+    }
+
+    try {
+      db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    } catch (err) {
+      if (isForeignKeyConstraintError(err)) {
+        throw new HttpError(409, 'This account is still referenced by related records');
+      }
+      throw err;
+    }
+
+    res.json({
+      success: true,
+      userId,
+      studentNumber: targetMember.studentNumber
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/admin/gallery', (req, res, next) => {
   try {

@@ -6,6 +6,7 @@
       <router-link :to="{ name: 'adminConcerts' }">{{ t('admin.pageConcerts') }}</router-link>
       <router-link :to="{ name: 'adminReviews' }">{{ t('admin.pageReviews') }}</router-link>
       <router-link :to="{ name: 'adminGallery' }">{{ t('admin.pageGallery') }}</router-link>
+      <router-link :to="{ name: 'adminMembers' }">{{ t('admin.pageMembers') }}</router-link>
     </article>
 
     <router-view />
