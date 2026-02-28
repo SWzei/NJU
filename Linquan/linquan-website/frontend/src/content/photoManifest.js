@@ -1,9 +1,9 @@
 const PHOTO_ROOT = '/photos';
 
 export const dashboardHeroPhoto = {
-  src: `${PHOTO_ROOT}/hero/home-hero.jpg`,
-  fallback:
-    'https://images.unsplash.com/photo-1514119412350-e174d90d280e?auto=format&fit=crop&w=1800&q=80'
+  src:
+    'https://images.unsplash.com/photo-1514119412350-e174d90d280e?auto=format&fit=crop&w=1800&q=80',
+  fallback: `${PHOTO_ROOT}/hero/home-hero.jpg`
 };
 
 export const linquanGalleryCards = [
