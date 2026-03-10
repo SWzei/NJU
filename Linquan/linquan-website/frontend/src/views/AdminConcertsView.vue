@@ -105,6 +105,14 @@
       <div class="row">
         <button class="btn" type="submit">{{ t('admin.saveConcert') }}</button>
         <button class="btn warn" type="button" @click="releaseConcert">{{ t('admin.releaseConcert') }}</button>
+        <button 
+          class="btn danger" 
+          style="background-color: #dc3545; border-color: #dc3545; color: white;" 
+          type="button" 
+          @click="deleteConcert"
+        >
+          {{ t('admin.deleteConcert') }}
+        </button>
       </div>
       <div class="field">
         <label>{{ t('admin.releaseMessage') }}</label>
@@ -294,6 +302,24 @@ async function releaseConcert() {
       message: releaseMessage.value || undefined
     });
     setMessage(t('admin.concertReleased', { count: data.notification?.sent || 0 }));
+    await loadConcerts();
+  } catch (err) {
+    setError(err);
+  }
+}
+
+async function deleteConcert() {
+  if (!selectedConcert.value) {
+    return;
+  }
+  
+  if (!window.confirm(t('admin.confirmDeleteConcert'))) {
+    return;
+  }
+  
+  try {
+    await api.delete(`/admin/concerts/${selectedConcert.value.id}`);
+    setMessage(t('admin.concertDeleted'));
     await loadConcerts();
   } catch (err) {
     setError(err);
