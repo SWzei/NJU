@@ -2209,6 +2209,41 @@ router.patch('/admin/concerts/:concertId/status', (req, res, next) => {
   }
 });
 
+router.delete('/admin/concerts/:concertId', async (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const existing = db
+      .prepare('SELECT id, attachment_path AS attachmentPath FROM concerts WHERE id = ?')
+      .get(concertId);
+      
+    if (!existing) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    db.prepare('DELETE FROM concerts WHERE id = ?').run(concertId);
+
+    if (existing.attachmentPath) {
+      try {
+        const fileName = path.basename(existing.attachmentPath);
+        const fullPath = path.join(uploadRoot, 'concerts', fileName);
+        if (fs.existsSync(fullPath)) {
+          fs.unlinkSync(fullPath);
+        }
+      } catch (fileErr) {
+        console.warn('Failed to delete concert attachment file:', fileErr);
+      }
+    }
+
+    res.json({ message: 'Concert deleted successfully', concertId });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.get('/admin/concerts/:concertId/applications', (req, res, next) => {
   try {
     const concertId = Number(req.params.concertId);
