@@ -3,6 +3,7 @@ import DashboardView from '@/views/DashboardView.vue';
 import LoginView from '@/views/LoginView.vue';
 import RegisterView from '@/views/RegisterView.vue';
 import ScheduleView from '@/views/ScheduleView.vue';
+import ClassMatchingView from '@/views/ClassMatchingView.vue';
 import ConcertsView from '@/views/ConcertsView.vue';
 import ProfileView from '@/views/ProfileView.vue';
 import MemberDirectoryView from '@/views/MemberDirectoryView.vue';
@@ -10,8 +11,8 @@ import MemberDetailView from '@/views/MemberDetailView.vue';
 import AdminLayoutView from '@/views/AdminLayoutView.vue';
 import AdminPublishingView from '@/views/AdminPublishingView.vue';
 import AdminSchedulingView from '@/views/AdminSchedulingView.vue';
+import AdminClassMatchingView from '@/views/AdminClassMatchingView.vue';
 import AdminConcertsView from '@/views/AdminConcertsView.vue';
-import AdminReviewsView from '@/views/AdminReviewsView.vue';
 import AdminGalleryView from '@/views/AdminGalleryView.vue';
 import AdminMembersView from '@/views/AdminMembersView.vue';
 
@@ -38,10 +39,15 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/class-matching',
+    name: 'classMatching',
+    component: ClassMatchingView,
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/concerts',
     name: 'concerts',
-    component: ConcertsView,
-    meta: { requiresAuth: true }
+    component: ConcertsView
   },
   {
     path: '/profile',
@@ -82,14 +88,14 @@ const routes = [
         component: AdminSchedulingView
       },
       {
+        path: 'class-matching',
+        name: 'adminClassMatching',
+        component: AdminClassMatchingView
+      },
+      {
         path: 'concerts',
         name: 'adminConcerts',
         component: AdminConcertsView
-      },
-      {
-        path: 'reviews',
-        name: 'adminReviews',
-        component: AdminReviewsView
       },
       {
         path: 'gallery',

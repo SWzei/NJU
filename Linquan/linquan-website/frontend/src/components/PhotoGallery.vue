@@ -120,6 +120,7 @@ function onImageError(event, fallback) {
 .photo-card span {
   font-size: 0.82rem;
   color: var(--muted);
+  white-space: pre-wrap;
 }
 
 @media (max-width: 980px) {

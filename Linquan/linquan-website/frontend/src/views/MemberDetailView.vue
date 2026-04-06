@@ -14,9 +14,9 @@
         </p>
         <p class="subtle">{{ t('profile.phone') }}: {{ member.phone || '-' }}</p>
         <p class="subtle">{{ t('profile.wechatAccount') }}: {{ member.wechatAccount || '-' }}</p>
-        <p>{{ member.bio || t('profile.noIntro') }}</p>
-        <p><strong>{{ t('profile.hobbies') }}:</strong> {{ member.hobbies || t('profile.notProvided') }}</p>
-        <p><strong>{{ t('profile.pianoInterests') }}:</strong> {{ member.pianoInterests || t('profile.notProvided') }}</p>
+        <p class="multiline-text">{{ member.bio || t('profile.noIntro') }}</p>
+        <p class="multiline-text"><strong>{{ t('profile.hobbies') }}:</strong> {{ member.hobbies || t('profile.notProvided') }}</p>
+        <p class="multiline-text"><strong>{{ t('profile.pianoInterests') }}:</strong> {{ member.pianoInterests || t('profile.notProvided') }}</p>
       </div>
       <div v-if="member.photoUrl" class="photo-block">
         <p class="subtle">{{ t('profile.personalPhoto') }}</p>
@@ -94,6 +94,10 @@ onMounted(async () => {
 
 .detail-wrap p {
   margin: 0.4rem 0 0;
+}
+
+.multiline-text {
+  white-space: pre-wrap;
 }
 
 .photo-block {

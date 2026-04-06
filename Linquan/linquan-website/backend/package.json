@@ -11,7 +11,9 @@
     "reload:pm2": "pm2 reload ecosystem.config.cjs --update-env",
     "db:init": "node src/scripts/initDb.js",
     "seed:test-members": "node src/scripts/seedTestMembers.js",
-    "test:smoke": "node scripts/smokeTest.mjs"
+    "test:smoke": "node scripts/smokeTest.mjs",
+    "test:modules:light": "node scripts/lightModuleValidation.mjs",
+    "test:compat:backup": "node scripts/validateBackupCompatibility.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

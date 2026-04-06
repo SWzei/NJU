@@ -9,7 +9,15 @@ import db from '../config/db.js';
 import { UPLOAD_ROOT } from '../config/env.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import HttpError from '../utils/httpError.js';
-import { createStandardSlots, resolveSemesterId } from '../utils/semester.js';
+import { createStandardSlots, getActiveSemesterId, resolveSemesterId } from '../utils/semester.js';
+import { attachContentAttachments } from '../utils/contentAttachments.js';
+import { normalizeUploadedFileMeta, normalizeUploadedOriginalName } from '../utils/uploadFilename.js';
+import {
+  currentUtcIsoString,
+  normalizePublishingEventTimeInput,
+  serializePublishingTimestamps
+} from '../utils/dateTime.js';
+import { coalescedTimestampOrder } from '../utils/sqlTimeCompat.js';
 import {
   generateProposedSchedule,
   updateProposedSchedule,
@@ -18,21 +26,32 @@ import {
 import { notifyUsers } from '../services/notificationService.js';
 
 const router = express.Router();
+const activityOrderExpr = coalescedTimestampOrder('a.event_time', 'a.published_at', 'a.created_at');
+const announcementOrderExpr = coalescedTimestampOrder('a.published_at', 'a.created_at');
 
 const uploadRoot = path.resolve(process.cwd(), UPLOAD_ROOT);
 const concertUploadDir = path.join(uploadRoot, 'concerts');
 if (!fs.existsSync(concertUploadDir)) {
   fs.mkdirSync(concertUploadDir, { recursive: true });
 }
+const activityUploadDir = path.join(uploadRoot, 'activities');
+if (!fs.existsSync(activityUploadDir)) {
+  fs.mkdirSync(activityUploadDir, { recursive: true });
+}
 const galleryUploadDir = path.join(uploadRoot, 'gallery');
 if (!fs.existsSync(galleryUploadDir)) {
   fs.mkdirSync(galleryUploadDir, { recursive: true });
+}
+const announcementUploadDir = path.join(uploadRoot, 'announcements');
+if (!fs.existsSync(announcementUploadDir)) {
+  fs.mkdirSync(announcementUploadDir, { recursive: true });
 }
 
 const concertUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, concertUploadDir),
     filename: (req, file, cb) => {
+      normalizeUploadedFileMeta(file);
       const ext = path.extname(file.originalname || '').toLowerCase();
       cb(null, `concert-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
     }
@@ -42,10 +61,80 @@ const concertUpload = multer({
   }
 });
 
+const allowedAttachmentExts = new Set([
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.csv',
+  '.txt',
+  '.md',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif',
+  '.zip',
+  '.ppt',
+  '.pptx'
+]);
+
+function validatePublishingAttachment(file) {
+  normalizeUploadedFileMeta(file);
+  const ext = path.extname(String(file?.originalname || '')).toLowerCase();
+  const mimeType = String(file?.mimetype || '').toLowerCase();
+  if (allowedAttachmentExts.has(ext)) {
+    return true;
+  }
+  if (
+    mimeType.startsWith('image/')
+    || mimeType === 'application/pdf'
+    || mimeType === 'text/plain'
+    || mimeType === 'text/csv'
+    || mimeType.includes('word')
+    || mimeType.includes('excel')
+    || mimeType.includes('sheet')
+    || mimeType.includes('powerpoint')
+    || mimeType.includes('presentation')
+    || mimeType.includes('zip')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function createPublishingUpload(targetDir, prefix) {
+  return multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => cb(null, targetDir),
+      filename: (req, file, cb) => {
+        normalizeUploadedFileMeta(file);
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        cb(null, `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
+      }
+    }),
+    limits: {
+      fileSize: 20 * 1024 * 1024,
+      files: 8
+    },
+    fileFilter: (req, file, cb) => {
+      if (validatePublishingAttachment(file)) {
+        return cb(null, true);
+      }
+      return cb(new HttpError(400, 'Unsupported attachment file type'));
+    }
+  });
+}
+
+const activityAttachmentUpload = createPublishingUpload(activityUploadDir, 'activity');
+const announcementAttachmentUpload = createPublishingUpload(announcementUploadDir, 'announcement');
+
 const galleryUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, galleryUploadDir),
     filename: (req, file, cb) => {
+      normalizeUploadedFileMeta(file);
       const ext = path.extname(file.originalname || '').toLowerCase();
       cb(null, `gallery-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
     }
@@ -86,6 +175,58 @@ function optionalBoolean(value) {
   return undefined;
 }
 
+function normalizeTrimmed(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+const requiredTrimmedString = (min, max) =>
+  z.preprocess(normalizeTrimmed, z.string().min(min).max(max));
+
+const optionalTrimmedString = (max) =>
+  z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const normalized = normalizeTrimmed(value);
+    return normalized === '' ? undefined : normalized;
+  }, z.string().max(max).optional());
+
+const nullableTrimmedString = (max) =>
+  z.preprocess((value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null) {
+      return null;
+    }
+    const normalized = normalizeTrimmed(value);
+    return normalized === '' ? null : normalized;
+  }, z.string().max(max).nullable().optional());
+
+const nullableDateTimeString = () =>
+  z.preprocess((value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null) {
+      return null;
+    }
+    const normalized = normalizeTrimmed(value);
+    if (normalized === '') {
+      return null;
+    }
+    return normalized.replace(' ', 'T');
+  }, z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/).nullable().optional());
+
+const trimmedStatus = (defaultValue) =>
+  z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return defaultValue;
+    }
+    const normalized = normalizeTrimmed(value);
+    return normalized === '' ? defaultValue : normalized;
+  }, z.enum(['draft', 'open', 'closed']).default(defaultValue));
+
 function toPublicPath(rawPath) {
   if (!rawPath) {
     return null;
@@ -105,11 +246,229 @@ function toStoredUploadPath(filePath) {
   return `/uploads/${relativePath}`;
 }
 
+function resolveManagedUploadPath(rawPath) {
+  if (!rawPath) {
+    return null;
+  }
+  const normalized = String(rawPath).replaceAll('\\', '/');
+  if (!normalized.startsWith('/uploads/')) {
+    return null;
+  }
+  const relativePath = normalized.replace(/^\/+uploads\/+/, '');
+  const absolutePath = path.resolve(uploadRoot, relativePath);
+  const relativeToRoot = path.relative(uploadRoot, absolutePath);
+  if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+    return null;
+  }
+  return absolutePath;
+}
+
+function removeManagedUploadFile(rawPath) {
+  const filePath = resolveManagedUploadPath(rawPath);
+  if (!filePath) {
+    return;
+  }
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+
+function cleanupUploadedFiles(files) {
+  for (const file of files || []) {
+    if (file?.path && fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
+  }
+}
+
+function parseIdList(rawValue, fieldName) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return [];
+  }
+  let values = rawValue;
+  if (typeof values === 'string' && values.trim().startsWith('[')) {
+    try {
+      values = JSON.parse(values);
+    } catch (err) {
+      throw new HttpError(400, `Invalid ${fieldName}`);
+    }
+  }
+  const source = Array.isArray(values) ? values : [values];
+  const parsed = [...new Set(source.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0))];
+  if (parsed.length !== source.length) {
+    throw new HttpError(400, `Invalid ${fieldName}`);
+  }
+  return parsed;
+}
+
+function loadContentAttachmentsForOwner(ownerType, ownerId) {
+  return attachContentAttachments(db, ownerType, [{ id: ownerId }], { primaryField: 'attachmentPath' })[0]?.attachments || [];
+}
+
+function insertContentAttachmentRows(ownerType, ownerId, files, createdBy) {
+  if (!files?.length) {
+    return [];
+  }
+  const insertStmt = db.prepare(
+    `INSERT INTO content_attachments (
+       owner_type, owner_id, original_name, file_path, file_size, mime_type, created_by
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  const tx = db.transaction(() => {
+    for (const file of files) {
+      insertStmt.run(
+        ownerType,
+        ownerId,
+        normalizeUploadedOriginalName(file.originalname || path.basename(file.path)),
+        toStoredUploadPath(file.path),
+        Number(file.size || 0),
+        file.mimetype || null,
+        createdBy || null
+      );
+    }
+  });
+  tx();
+  return loadContentAttachmentsForOwner(ownerType, ownerId);
+}
+
+function deleteContentAttachmentRows(ownerType, ownerId, attachmentIds) {
+  const normalizedIds = [...new Set((attachmentIds || []).map((item) => Number(item)).filter((item) => item > 0))];
+  if (!normalizedIds.length) {
+    return;
+  }
+  const placeholders = normalizedIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT id, file_path AS filePath
+       FROM content_attachments
+       WHERE owner_type = ? AND owner_id = ? AND id IN (${placeholders})`
+    )
+    .all(ownerType, ownerId, ...normalizedIds);
+  if (rows.length !== normalizedIds.length) {
+    throw new HttpError(404, 'Attachment not found');
+  }
+
+  const deleteStmt = db.prepare(
+    `DELETE FROM content_attachments
+     WHERE owner_type = ? AND owner_id = ? AND id = ?`
+  );
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      deleteStmt.run(ownerType, ownerId, row.id);
+      removeManagedUploadFile(row.filePath);
+    }
+  });
+  tx();
+}
+
+function deleteAllContentAttachments(ownerType, ownerId) {
+  const rows = loadContentAttachmentsForOwner(ownerType, ownerId);
+  const deleteStmt = db.prepare(
+    `DELETE FROM content_attachments
+     WHERE owner_type = ? AND owner_id = ?`
+  );
+  const tx = db.transaction(() => {
+    deleteStmt.run(ownerType, ownerId);
+    for (const row of rows) {
+      removeManagedUploadFile(row.filePath);
+    }
+  });
+  tx();
+}
+
+function getContentAttachmentRow(ownerType, ownerId, attachmentId) {
+  return db
+    .prepare(
+      `SELECT
+         id,
+         owner_type AS ownerType,
+         owner_id AS ownerId,
+         original_name AS originalName,
+         file_path AS filePath,
+         file_size AS fileSize,
+         mime_type AS mimeType,
+         created_by AS createdBy,
+         created_at AS createdAt
+       FROM content_attachments
+       WHERE owner_type = ? AND owner_id = ? AND id = ?`
+    )
+    .get(ownerType, ownerId, attachmentId);
+}
+
+function replaceContentAttachmentRow(ownerType, ownerId, attachmentId, file, createdBy) {
+  const existing = getContentAttachmentRow(ownerType, ownerId, attachmentId);
+  if (!existing) {
+    throw new HttpError(404, 'Attachment not found');
+  }
+
+  db.prepare(
+    `UPDATE content_attachments
+     SET
+       original_name = ?,
+       file_path = ?,
+       file_size = ?,
+       mime_type = ?,
+       created_by = ?
+     WHERE owner_type = ? AND owner_id = ? AND id = ?`
+  ).run(
+    normalizeUploadedOriginalName(file.originalname || path.basename(file.path)),
+    toStoredUploadPath(file.path),
+    Number(file.size || 0),
+    file.mimetype || null,
+    createdBy || existing.createdBy || null,
+    ownerType,
+    ownerId,
+    attachmentId
+  );
+
+  removeManagedUploadFile(existing.filePath);
+}
+
+function syncAnnouncementAttachmentPath(announcementId) {
+  const firstAttachment = db
+    .prepare(
+      `SELECT file_path AS filePath
+       FROM content_attachments
+       WHERE owner_type = 'announcement' AND owner_id = ?
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`
+    )
+    .get(announcementId);
+  db.prepare('UPDATE announcements SET attachment_path = ? WHERE id = ?').run(
+    firstAttachment?.filePath || null,
+    announcementId
+  );
+}
+
 function mapGalleryRow(item) {
   return {
     ...item,
     isVisible: Boolean(item.isVisible)
   };
+}
+
+function serializePublishingItem(item) {
+  return serializePublishingTimestamps(item);
+}
+
+function serializeConcertItem(item) {
+  if (!item) {
+    return item;
+  }
+  return serializePublishingTimestamps({
+    ...item,
+    attachmentPath: toPublicPath(item.attachmentPath)
+  });
+}
+
+function serializeConcertApplicationItem(item) {
+  if (!item) {
+    return item;
+  }
+  return serializePublishingTimestamps({
+    ...item,
+    scoreFilePath: toPublicPath(item.scoreFilePath)
+  });
 }
 
 function escapeCsv(value) {
@@ -126,11 +485,6 @@ function parsePositiveInt(value, fieldName) {
     throw new HttpError(400, `Invalid ${fieldName}`);
   }
   return number;
-}
-
-function isForeignKeyConstraintError(err) {
-  const message = String(err?.message || '').toLowerCase();
-  return message.includes('foreign key') || message.includes('violates foreign key constraint');
 }
 
 function generateTemporaryPassword(length = 10) {
@@ -164,9 +518,10 @@ function getScheduleCompliance(semesterId, batchId) {
   const totalMembers = Number(
     db
       .prepare(
-        `SELECT COUNT(DISTINCT user_id) AS count
-         FROM slot_preferences
-         WHERE semester_id = ?`
+        `SELECT COUNT(DISTINCT sp.user_id) AS count
+         FROM slot_preferences sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.semester_id = ? AND u.role = 'member' AND u.is_active = 1`
       )
       .get(semesterId)?.count || 0
   );
@@ -174,10 +529,11 @@ function getScheduleCompliance(semesterId, batchId) {
   const memberHours = batchId
     ? db
       .prepare(
-        `SELECT user_id AS userId, COUNT(*) AS hours
-         FROM schedule_assignments
-         WHERE batch_id = ?
-         GROUP BY user_id`
+        `SELECT sa.user_id AS userId, COUNT(*) AS hours
+         FROM schedule_assignments sa
+         JOIN users u ON u.id = sa.user_id
+         WHERE sa.batch_id = ? AND u.role = 'member' AND u.is_active = 1
+         GROUP BY sa.user_id`
       )
       .all(batchId)
     : [];
@@ -332,30 +688,152 @@ function deriveUnsatisfiedMembers(members) {
 }
 
 const semesterSchema = z.object({
-  name: z.string().min(2).max(80),
+  name: z.string().trim().min(2).max(80),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   activate: z.boolean().default(true)
 });
+const semesterUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(80).optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  activate: z.boolean().optional()
+});
+
+function isSqliteUniqueConstraint(err, tableName = '', columnName = '') {
+  const message = String(err?.message || '');
+  if (!/SQLITE_CONSTRAINT_UNIQUE|UNIQUE constraint failed/i.test(message)) {
+    return false;
+  }
+  if (!tableName) {
+    return true;
+  }
+  const target = columnName ? `${tableName}.${columnName}` : tableName;
+  return message.includes(target);
+}
+
+function mapSemesterRow(row) {
+  if (!row) {
+    return null;
+  }
+  return {
+    ...row,
+    isActive: Boolean(row.isActive)
+  };
+}
+
+function listSemesterRows() {
+  return db
+    .prepare(
+      `SELECT
+         id,
+         name,
+         start_date AS startDate,
+         end_date AS endDate,
+         is_active AS isActive,
+         created_at AS createdAt
+       FROM semesters
+       ORDER BY is_active DESC, start_date DESC, id DESC`
+    )
+    .all()
+    .map(mapSemesterRow);
+}
+
+function getSemesterRow(semesterId) {
+  return mapSemesterRow(
+    db
+      .prepare(
+        `SELECT
+           id,
+           name,
+           start_date AS startDate,
+           end_date AS endDate,
+           is_active AS isActive,
+           created_at AS createdAt
+         FROM semesters
+         WHERE id = ?`
+      )
+      .get(semesterId)
+  );
+}
+
+function findReplacementSemesterId(excludedSemesterId) {
+  return (
+    db
+      .prepare(
+        `SELECT id
+         FROM semesters
+         WHERE id != ?
+         ORDER BY is_active DESC, start_date DESC, id DESC
+         LIMIT 1`
+      )
+      .get(excludedSemesterId)?.id || null
+  );
+}
+
+function getSchedulingPreferenceSummary(semesterId, batchId = null) {
+  const summary = db
+    .prepare(
+      `SELECT
+         COUNT(DISTINCT u.id) AS totalMembers,
+         COUNT(DISTINCT CASE WHEN sp.id IS NOT NULL THEN u.id END) AS membersWithPreferences,
+         COUNT(DISTINCT CASE WHEN sa.id IS NOT NULL THEN u.id END) AS membersInDraft
+       FROM users u
+       LEFT JOIN slot_preferences sp
+         ON sp.user_id = u.id
+        AND sp.semester_id = ?
+       LEFT JOIN schedule_assignments sa
+         ON sa.user_id = u.id
+        AND sa.batch_id = ?
+       WHERE u.role = 'member'
+         AND u.is_active = 1`
+    )
+    .get(semesterId, batchId || -1);
+  const totalMembers = Number(summary?.totalMembers || 0);
+  const membersWithPreferences = Number(summary?.membersWithPreferences || 0);
+  const membersInDraft = Number(summary?.membersInDraft || 0);
+  return {
+    totalMembers,
+    membersWithPreferences,
+    membersWithoutPreferences: Math.max(0, totalMembers - membersWithPreferences),
+    membersInDraft,
+    readyForGeneration: membersWithPreferences > 0
+  };
+}
 
 const publishContentSchema = z.object({
-  title: z.string().min(2).max(150),
-  content: z.string().min(2).max(5000),
-  eventTime: z.string().optional(),
-  location: z.string().max(256).optional()
+  title: requiredTrimmedString(2, 150),
+  content: requiredTrimmedString(2, 5000),
+  eventTime: optionalTrimmedString(64),
+  location: optionalTrimmedString(256),
+  isPublished: z.boolean().default(true)
 });
 
 const updateActivitySchema = z.object({
-  title: z.string().min(2).max(150).optional(),
-  content: z.string().min(2).max(5000).optional(),
-  eventTime: z.string().nullable().optional(),
-  location: z.string().max(256).nullable().optional(),
+  title: optionalTrimmedString(150).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Title must be at least 2 characters'
+  }),
+  content: optionalTrimmedString(5000).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Content must be at least 2 characters'
+  }),
+  eventTime: nullableTrimmedString(64),
+  location: nullableTrimmedString(256),
   isPublished: z.boolean().optional()
 });
 
+const publishAnnouncementSchema = z.object({
+  title: requiredTrimmedString(2, 150),
+  content: requiredTrimmedString(2, 5000),
+  isPublished: z.boolean().default(true)
+});
+
 const updateAnnouncementSchema = z.object({
-  title: z.string().min(2).max(150).optional(),
-  content: z.string().min(2).max(5000).optional(),
+  title: optionalTrimmedString(150).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Title must be at least 2 characters'
+  }),
+  content: optionalTrimmedString(5000).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Content must be at least 2 characters'
+  }),
   isPublished: z.boolean().optional()
 });
 
@@ -383,37 +861,32 @@ const exportScheduleSchema = z.object({
 });
 
 const createConcertSchema = z.object({
-  title: z.string().min(2).max(200),
-  description: z.string().max(5000).nullable().optional(),
-  announcement: z.string().max(5000).nullable().optional(),
-  applicationDeadline: z.string().nullable().optional(),
-  status: z.enum(['draft', 'open', 'audition', 'result', 'closed']).default('draft')
+  title: requiredTrimmedString(2, 200),
+  description: nullableTrimmedString(5000),
+  announcement: nullableTrimmedString(5000),
+  applicationDeadline: nullableDateTimeString(),
+  status: trimmedStatus('draft')
 });
 
 const updateConcertSchema = z.object({
-  title: z.string().min(2).max(200).optional(),
-  description: z.string().max(5000).nullable().optional(),
-  announcement: z.string().max(5000).nullable().optional(),
-  applicationDeadline: z.string().nullable().optional(),
-  status: z.enum(['draft', 'open', 'audition', 'result', 'closed']).optional(),
+  title: optionalTrimmedString(200).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Title must be at least 2 characters'
+  }),
+  description: nullableTrimmedString(5000),
+  announcement: nullableTrimmedString(5000),
+  applicationDeadline: nullableDateTimeString(),
+  status: z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const normalized = normalizeTrimmed(value);
+    return normalized === '' ? undefined : normalized;
+  }, z.enum(['draft', 'open', 'closed']).optional()),
   removeAttachment: z.boolean().optional()
 });
 
 const releaseConcertSchema = z.object({
   message: z.string().max(5000).nullable().optional()
-});
-
-const createAuditionSchema = z.object({
-  applicationId: z.number().int().positive().optional(),
-  startTime: z.string().min(10),
-  endTime: z.string().min(10),
-  location: z.string().max(256).optional()
-});
-
-const publishResultSchema = z.object({
-  applicationId: z.number().int().positive(),
-  status: z.enum(['accepted', 'rejected', 'waitlist']),
-  feedback: z.string().max(2000).optional()
 });
 
 const createGalleryItemSchema = z.object({
@@ -465,13 +938,14 @@ router.get('/admin/members', (req, res, next) => {
              u.role,
              u.created_at AS createdAt,
              u.updated_at AS updatedAt,
-             p.display_name AS displayName,
-             p.academy,
-             p.major,
-             p.grade
+           p.display_name AS displayName,
+           p.academy,
+           p.major,
+           p.grade
            FROM users u
            LEFT JOIN profiles p ON p.user_id = u.id
            WHERE u.role = 'member'
+             AND u.is_active = 1
              AND (
                LOWER(u.student_number) LIKE ?
                OR LOWER(COALESCE(u.email, '')) LIKE ?
@@ -493,13 +967,14 @@ router.get('/admin/members', (req, res, next) => {
              u.role,
              u.created_at AS createdAt,
              u.updated_at AS updatedAt,
-             p.display_name AS displayName,
-             p.academy,
-             p.major,
-             p.grade
+           p.display_name AS displayName,
+           p.academy,
+           p.major,
+           p.grade
            FROM users u
            LEFT JOIN profiles p ON p.user_id = u.id
            WHERE u.role = 'member'
+             AND u.is_active = 1
            ORDER BY u.id DESC`
         )
         .all();
@@ -540,7 +1015,7 @@ router.get('/admin/members/:userId(\\d+)', (req, res, next) => {
            p.phone
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
-         WHERE u.id = ? AND u.role = 'member'
+         WHERE u.id = ? AND u.role = 'member' AND u.is_active = 1
          LIMIT 1`
       )
       .get(userId);
@@ -588,7 +1063,8 @@ router.post('/admin/members/:userId(\\d+)/reset-password', (req, res, next) => {
         `SELECT
            id,
            student_number AS studentNumber,
-           role
+           role,
+           is_active AS isActive
          FROM users
          WHERE id = ?`
       )
@@ -599,6 +1075,9 @@ router.post('/admin/members/:userId(\\d+)/reset-password', (req, res, next) => {
     }
     if (targetMember.role !== 'member') {
       throw new HttpError(403, 'Only member accounts can be managed here');
+    }
+    if (!Boolean(targetMember.isActive)) {
+      throw new HttpError(404, 'Member account not found');
     }
 
     const temporaryPassword = input.newPassword || generateTemporaryPassword(10);
@@ -630,7 +1109,8 @@ router.delete('/admin/members/:userId(\\d+)', (req, res, next) => {
         `SELECT
            id,
            student_number AS studentNumber,
-           role
+           role,
+           is_active AS isActive
          FROM users
          WHERE id = ?`
       )
@@ -640,22 +1120,20 @@ router.delete('/admin/members/:userId(\\d+)', (req, res, next) => {
       throw new HttpError(404, 'Member account not found');
     }
     if (targetMember.role !== 'member') {
-      throw new HttpError(403, 'Only member accounts can be deleted here');
+      throw new HttpError(403, 'Only member accounts can be deactivated here');
     }
-
-    try {
-      db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    } catch (err) {
-      if (isForeignKeyConstraintError(err)) {
-        throw new HttpError(409, 'This account is still referenced by related records');
-      }
-      throw err;
-    }
+    db.prepare(
+      `UPDATE users
+       SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(userId);
 
     res.json({
       success: true,
       userId,
-      studentNumber: targetMember.studentNumber
+      studentNumber: targetMember.studentNumber,
+      isActive: false,
+      alreadyInactive: !Boolean(targetMember.isActive)
     });
   } catch (err) {
     next(err);
@@ -852,6 +1330,10 @@ router.patch('/admin/gallery/:itemId', (req, res, next) => {
       itemId
     );
 
+    if (input.src !== undefined && input.src !== current.src) {
+      removeManagedUploadFile(current.src);
+    }
+
     const updated = db
       .prepare(
         `SELECT
@@ -889,29 +1371,103 @@ router.delete('/admin/gallery/:itemId', (req, res, next) => {
       throw new HttpError(400, 'Invalid itemId');
     }
 
+    const existing = db.prepare('SELECT id, src FROM gallery_items WHERE id = ?').get(itemId);
+    if (!existing) {
+      throw new HttpError(404, 'Gallery item not found');
+    }
+
     const result = db.prepare('DELETE FROM gallery_items WHERE id = ?').run(itemId);
     if (result.changes === 0) {
       throw new HttpError(404, 'Gallery item not found');
     }
+    removeManagedUploadFile(existing.src);
     res.json({ message: 'Gallery item deleted', itemId });
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/admin/activities', (req, res, next) => {
+router.post('/admin/activities', activityAttachmentUpload.array('attachmentFiles', 8), (req, res, next) => {
   try {
-    const input = publishContentSchema.parse(req.body);
+    const input = publishContentSchema.parse({
+      title: req.body.title,
+      content: req.body.content,
+      eventTime: req.body.eventTime,
+      location: req.body.location,
+      isPublished: optionalBoolean(req.body.isPublished) ?? true
+    });
+
+    const nowUtc = currentUtcIsoString();
+    const normalizedEventTime = normalizePublishingEventTimeInput(input.eventTime);
+    const publishedAt = input.isPublished ? nowUtc : null;
 
     const result = db
       .prepare(
-        `INSERT INTO activities (title, content, event_time, location, created_by, is_published)
-         VALUES (?, ?, ?, ?, ?, 1)`
+        `INSERT INTO activities (
+           title, content, event_time, location, created_by, is_published, published_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(input.title, input.content, input.eventTime || null, input.location || null, req.user.id);
+      .run(
+        input.title,
+        input.content,
+        normalizedEventTime,
+        input.location || null,
+        req.user.id,
+        input.isPublished ? 1 : 0,
+        publishedAt,
+        nowUtc,
+        nowUtc
+      );
 
-    res.status(201).json({ id: Number(result.lastInsertRowid) });
+    const activityId = Number(result.lastInsertRowid);
+    insertContentAttachmentRows('activity', activityId, req.files, req.user.id);
+
+    const created = attachContentAttachments(
+      db,
+      'activity',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               event_time AS eventTime,
+               location,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM activities
+             WHERE id = ?`
+          )
+          .get(activityId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+
+    if (input.isPublished) {
+      const memberIds = db
+        .prepare("SELECT id FROM users WHERE role = 'member' AND is_active = 1")
+        .all()
+        .map((row) => row.id);
+      notifyUsers({
+        userIds: memberIds,
+        subject: `[NJU林泉钢琴社活动] ${created.title}`,
+        content: created.content,
+        relatedType: 'activity',
+        relatedId: activityId
+      }).catch((notifyErr) => {
+        console.warn('Activity publish notification failed:', notifyErr);
+      });
+    }
+
+    res.status(201).json(serializePublishingItem({
+      ...created,
+      isPublished: Boolean(created.isPublished)
+    }));
   } catch (err) {
+    cleanupUploadedFiles(req.files);
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid activity payload', details: err.issues });
     }
@@ -921,27 +1477,33 @@ router.post('/admin/activities', (req, res, next) => {
 
 router.get('/admin/activities', (req, res, next) => {
   try {
-    const rows = db
-      .prepare(
-        `SELECT
-           a.id,
-           a.title,
-           a.content,
-           a.event_time AS eventTime,
-           a.location,
-           a.is_published AS isPublished,
-           a.created_at AS createdAt,
-           a.updated_at AS updatedAt,
-           u.student_number AS createdByStudentNumber,
-           COALESCE(p.display_name, u.student_number) AS createdByName
-         FROM activities a
-         LEFT JOIN users u ON u.id = a.created_by
-         LEFT JOIN profiles p ON p.user_id = u.id
-         ORDER BY COALESCE(a.event_time, a.created_at) DESC, a.id DESC`
-      )
-      .all()
+    const rows = attachContentAttachments(
+      db,
+      'activity',
+      db
+        .prepare(
+          `SELECT
+             a.id,
+             a.title,
+             a.content,
+             a.event_time AS eventTime,
+             a.location,
+             a.is_published AS isPublished,
+             a.published_at AS publishedAt,
+             a.created_at AS createdAt,
+             a.updated_at AS updatedAt,
+             u.student_number AS createdByStudentNumber,
+             COALESCE(p.display_name, u.student_number) AS createdByName
+           FROM activities a
+           LEFT JOIN users u ON u.id = a.created_by
+           LEFT JOIN profiles p ON p.user_id = u.id
+           ORDER BY ${activityOrderExpr} DESC, a.id DESC`
+        )
+        .all(),
+      { primaryField: 'attachmentPath' }
+    )
       .map((item) => ({
-        ...item,
+        ...serializePublishingItem(item),
         isPublished: Boolean(item.isPublished)
       }));
 
@@ -951,7 +1513,7 @@ router.get('/admin/activities', (req, res, next) => {
   }
 });
 
-router.patch('/admin/activities/:activityId', (req, res, next) => {
+router.patch('/admin/activities/:activityId', activityAttachmentUpload.array('attachmentFiles', 8), (req, res, next) => {
   try {
     const activityId = Number(req.params.activityId);
     if (!Number.isInteger(activityId) || activityId <= 0) {
@@ -965,6 +1527,7 @@ router.patch('/admin/activities/:activityId', (req, res, next) => {
       location: optionalString(req.body.location),
       isPublished: optionalBoolean(req.body.isPublished)
     });
+    const removeAttachmentIds = parseIdList(req.body.removeAttachmentIds, 'removeAttachmentIds');
 
     const current = db
       .prepare(
@@ -974,7 +1537,8 @@ router.patch('/admin/activities/:activityId', (req, res, next) => {
            content,
            event_time AS eventTime,
            location,
-           is_published AS isPublished
+           is_published AS isPublished,
+           published_at AS publishedAt
          FROM activities
          WHERE id = ?`
       )
@@ -982,6 +1546,15 @@ router.patch('/admin/activities/:activityId', (req, res, next) => {
     if (!current) {
       throw new HttpError(404, 'Activity not found');
     }
+
+    const nextPublished =
+      input.isPublished === undefined ? Boolean(current.isPublished) : Boolean(input.isPublished);
+    const nowUtc = currentUtcIsoString();
+    const nextEventTime =
+      input.eventTime === undefined
+        ? current.eventTime
+        : normalizePublishingEventTimeInput(input.eventTime);
+    const nextPublishedAt = nextPublished ? (current.publishedAt || nowUtc) : null;
 
     db.prepare(
       `UPDATE activities
@@ -991,18 +1564,165 @@ router.patch('/admin/activities/:activityId', (req, res, next) => {
          event_time = ?,
          location = ?,
          is_published = ?,
-         updated_at = CURRENT_TIMESTAMP
+         published_at = ?,
+         updated_at = ?
        WHERE id = ?`
     ).run(
       input.title ?? current.title,
       input.content ?? current.content,
-      input.eventTime === undefined ? current.eventTime : input.eventTime,
+      nextEventTime,
       input.location === undefined ? current.location : input.location,
-      input.isPublished === undefined ? current.isPublished : (input.isPublished ? 1 : 0),
+      nextPublished ? 1 : 0,
+      nextPublishedAt,
+      nowUtc,
       activityId
     );
 
-    const updated = db
+    deleteContentAttachmentRows('activity', activityId, removeAttachmentIds);
+    insertContentAttachmentRows('activity', activityId, req.files, req.user.id);
+
+    const updated = attachContentAttachments(
+      db,
+      'activity',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               event_time AS eventTime,
+               location,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM activities
+             WHERE id = ?`
+          )
+          .get(activityId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+
+    if (!Boolean(current.isPublished) && nextPublished) {
+      const memberIds = db
+        .prepare("SELECT id FROM users WHERE role = 'member' AND is_active = 1")
+        .all()
+        .map((row) => row.id);
+      notifyUsers({
+        userIds: memberIds,
+        subject: `[NJU林泉钢琴社活动] ${updated.title}`,
+        content: updated.content,
+        relatedType: 'activity',
+        relatedId: activityId
+      }).catch((notifyErr) => {
+        console.warn('Activity publish notification failed:', notifyErr);
+      });
+    }
+
+    res.json(serializePublishingItem({
+      ...updated,
+      isPublished: Boolean(updated.isPublished)
+    }));
+  } catch (err) {
+    cleanupUploadedFiles(req.files);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid activity update payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.post(
+  '/admin/activities/:activityId/attachments/:attachmentId/replace',
+  activityAttachmentUpload.single('attachmentFile'),
+  (req, res, next) => {
+    try {
+      const activityId = Number(req.params.activityId);
+      const attachmentId = Number(req.params.attachmentId);
+      if (!Number.isInteger(activityId) || activityId <= 0) {
+        throw new HttpError(400, 'Invalid activityId');
+      }
+      if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+        throw new HttpError(400, 'Invalid attachmentId');
+      }
+      if (!req.file) {
+        throw new HttpError(400, 'Attachment file is required');
+      }
+
+      const current = db
+        .prepare(
+          `SELECT
+             id,
+             title,
+             content,
+             event_time AS eventTime,
+             location,
+             is_published AS isPublished,
+             published_at AS publishedAt,
+             created_at AS createdAt,
+             updated_at AS updatedAt
+           FROM activities
+           WHERE id = ?`
+        )
+        .get(activityId);
+      if (!current) {
+        throw new HttpError(404, 'Activity not found');
+      }
+
+      replaceContentAttachmentRow('activity', activityId, attachmentId, req.file, req.user.id);
+      db.prepare('UPDATE activities SET updated_at = ? WHERE id = ?').run(currentUtcIsoString(), activityId);
+
+      const updated = attachContentAttachments(
+        db,
+        'activity',
+        [
+          db
+            .prepare(
+              `SELECT
+                 id,
+                 title,
+                 content,
+                 event_time AS eventTime,
+                 location,
+                 is_published AS isPublished,
+                 published_at AS publishedAt,
+                 created_at AS createdAt,
+                 updated_at AS updatedAt
+               FROM activities
+               WHERE id = ?`
+            )
+            .get(activityId)
+        ],
+        { primaryField: 'attachmentPath' }
+      )[0];
+      return res.json({
+        message: 'Activity attachment replaced',
+        item: serializePublishingItem({
+          ...updated,
+          isPublished: Boolean(updated.isPublished)
+        })
+      });
+    } catch (err) {
+      cleanupUploadedFiles(req.file ? [req.file] : []);
+      return next(err);
+    }
+  }
+);
+
+router.delete('/admin/activities/:activityId/attachments/:attachmentId', (req, res, next) => {
+  try {
+    const activityId = Number(req.params.activityId);
+    const attachmentId = Number(req.params.attachmentId);
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new HttpError(400, 'Invalid activityId');
+    }
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      throw new HttpError(400, 'Invalid attachmentId');
+    }
+
+    const current = db
       .prepare(
         `SELECT
            id,
@@ -1011,21 +1731,50 @@ router.patch('/admin/activities/:activityId', (req, res, next) => {
            event_time AS eventTime,
            location,
            is_published AS isPublished,
+           published_at AS publishedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
          FROM activities
          WHERE id = ?`
       )
       .get(activityId);
+    if (!current) {
+      throw new HttpError(404, 'Activity not found');
+    }
 
-    res.json({
-      ...updated,
-      isPublished: Boolean(updated.isPublished)
+    deleteContentAttachmentRows('activity', activityId, [attachmentId]);
+    db.prepare('UPDATE activities SET updated_at = ? WHERE id = ?').run(currentUtcIsoString(), activityId);
+    const updated = attachContentAttachments(
+      db,
+      'activity',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               event_time AS eventTime,
+               location,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM activities
+             WHERE id = ?`
+          )
+          .get(activityId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+    return res.json({
+      message: 'Activity attachment deleted',
+      item: serializePublishingItem({
+        ...updated,
+        isPublished: Boolean(updated.isPublished)
+      })
     });
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: 'Invalid activity update payload', details: err.issues });
-    }
     return next(err);
   }
 });
@@ -1037,46 +1786,91 @@ router.delete('/admin/activities/:activityId', (req, res, next) => {
       throw new HttpError(400, 'Invalid activityId');
     }
 
+    const existing = db.prepare('SELECT id FROM activities WHERE id = ?').get(activityId);
+    if (!existing) {
+      throw new HttpError(404, 'Activity not found');
+    }
+
     const result = db.prepare('DELETE FROM activities WHERE id = ?').run(activityId);
     if (result.changes === 0) {
       throw new HttpError(404, 'Activity not found');
     }
+    deleteAllContentAttachments('activity', activityId);
     res.json({ message: 'Activity deleted', activityId });
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/admin/announcements', async (req, res, next) => {
+router.post('/admin/announcements', announcementAttachmentUpload.array('attachmentFiles', 8), async (req, res, next) => {
   try {
-    const input = z
-      .object({
-        title: z.string().min(2).max(150),
-        content: z.string().min(2).max(5000)
-      })
-      .parse(req.body);
+    const input = publishAnnouncementSchema.parse({
+      title: req.body.title,
+      content: req.body.content,
+      isPublished: optionalBoolean(req.body.isPublished) ?? true
+    });
+
+    const nowUtc = currentUtcIsoString();
+    const publishedAt = input.isPublished ? nowUtc : null;
 
     const result = db
       .prepare(
-        `INSERT INTO announcements (title, content, created_by, is_published)
-         VALUES (?, ?, ?, 1)`
+        `INSERT INTO announcements (
+           title, content, attachment_path, created_by, is_published, published_at, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(input.title, input.content, req.user.id);
+      .run(input.title, input.content, null, req.user.id, input.isPublished ? 1 : 0, publishedAt, nowUtc, nowUtc);
 
-    const memberIds = db
-      .prepare("SELECT id FROM users WHERE role = 'member'")
-      .all()
-      .map((row) => row.id);
-    const notifyResult = await notifyUsers({
-      userIds: memberIds,
-      subject: `[NJU林泉钢琴社公告] ${input.title}`,
-      content: input.content,
-      relatedType: 'announcement',
-      relatedId: Number(result.lastInsertRowid)
-    });
+    const announcementId = Number(result.lastInsertRowid);
+    insertContentAttachmentRows('announcement', announcementId, req.files, req.user.id);
+    syncAnnouncementAttachmentPath(announcementId);
 
-    res.status(201).json({ id: Number(result.lastInsertRowid), notification: notifyResult });
+    let notifyResult = { queued: 0, sent: 0, failed: 0, errors: [] };
+    if (input.isPublished) {
+      const memberIds = db
+        .prepare("SELECT id FROM users WHERE role = 'member' AND is_active = 1")
+        .all()
+        .map((row) => row.id);
+      notifyResult = await notifyUsers({
+        userIds: memberIds,
+        subject: `[NJU林泉钢琴社公告] ${input.title}`,
+        content: input.content,
+        relatedType: 'announcement',
+        relatedId: announcementId
+      });
+    }
+
+    const created = attachContentAttachments(
+      db,
+      'announcement',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               attachment_path AS attachmentPath,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM announcements
+             WHERE id = ?`
+          )
+          .get(announcementId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+
+    res.status(201).json(serializePublishingItem({
+      ...created,
+      isPublished: Boolean(created.isPublished),
+      notification: notifyResult
+    }));
   } catch (err) {
+    cleanupUploadedFiles(req.files);
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid announcement payload', details: err.issues });
     }
@@ -1084,27 +1878,110 @@ router.post('/admin/announcements', async (req, res, next) => {
   }
 });
 
+router.post(
+  '/admin/announcements/:announcementId/attachments/:attachmentId/replace',
+  announcementAttachmentUpload.single('attachmentFile'),
+  (req, res, next) => {
+    try {
+      const announcementId = Number(req.params.announcementId);
+      const attachmentId = Number(req.params.attachmentId);
+      if (!Number.isInteger(announcementId) || announcementId <= 0) {
+        throw new HttpError(400, 'Invalid announcementId');
+      }
+      if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+        throw new HttpError(400, 'Invalid attachmentId');
+      }
+      if (!req.file) {
+        throw new HttpError(400, 'Attachment file is required');
+      }
+
+      const current = db
+        .prepare(
+          `SELECT
+             id,
+             title,
+             content,
+             attachment_path AS attachmentPath,
+             is_published AS isPublished,
+             published_at AS publishedAt,
+             created_at AS createdAt,
+             updated_at AS updatedAt
+           FROM announcements
+           WHERE id = ?`
+        )
+        .get(announcementId);
+      if (!current) {
+        throw new HttpError(404, 'Announcement not found');
+      }
+
+      replaceContentAttachmentRow('announcement', announcementId, attachmentId, req.file, req.user.id);
+      db.prepare('UPDATE announcements SET updated_at = ? WHERE id = ?').run(currentUtcIsoString(), announcementId);
+      syncAnnouncementAttachmentPath(announcementId);
+
+      const updated = attachContentAttachments(
+        db,
+        'announcement',
+        [
+          db
+            .prepare(
+              `SELECT
+                 id,
+                 title,
+                 content,
+                 attachment_path AS attachmentPath,
+                 is_published AS isPublished,
+                 published_at AS publishedAt,
+                 created_at AS createdAt,
+                 updated_at AS updatedAt
+               FROM announcements
+               WHERE id = ?`
+            )
+            .get(announcementId)
+        ],
+        { primaryField: 'attachmentPath' }
+      )[0];
+      return res.json({
+        message: 'Announcement attachment replaced',
+        item: serializePublishingItem({
+          ...updated,
+          isPublished: Boolean(updated.isPublished)
+        })
+      });
+    } catch (err) {
+      cleanupUploadedFiles(req.file ? [req.file] : []);
+      return next(err);
+    }
+  }
+);
+
 router.get('/admin/announcements', (req, res, next) => {
   try {
-    const rows = db
-      .prepare(
-        `SELECT
-           a.id,
-           a.title,
-           a.content,
-           a.is_published AS isPublished,
-           a.created_at AS createdAt,
-           a.updated_at AS updatedAt,
-           u.student_number AS createdByStudentNumber,
-           COALESCE(p.display_name, u.student_number) AS createdByName
-         FROM announcements a
-         LEFT JOIN users u ON u.id = a.created_by
-         LEFT JOIN profiles p ON p.user_id = u.id
-         ORDER BY a.created_at DESC, a.id DESC`
-      )
-      .all()
+    const rows = attachContentAttachments(
+      db,
+      'announcement',
+      db
+        .prepare(
+          `SELECT
+             a.id,
+             a.title,
+             a.content,
+             a.attachment_path AS attachmentPath,
+             a.is_published AS isPublished,
+             a.published_at AS publishedAt,
+             a.created_at AS createdAt,
+             a.updated_at AS updatedAt,
+             u.student_number AS createdByStudentNumber,
+             COALESCE(p.display_name, u.student_number) AS createdByName
+           FROM announcements a
+           LEFT JOIN users u ON u.id = a.created_by
+           LEFT JOIN profiles p ON p.user_id = u.id
+           ORDER BY ${announcementOrderExpr} DESC, a.id DESC`
+        )
+        .all(),
+      { primaryField: 'attachmentPath' }
+    )
       .map((item) => ({
-        ...item,
+        ...serializePublishingItem(item),
         isPublished: Boolean(item.isPublished)
       }));
 
@@ -1114,7 +1991,7 @@ router.get('/admin/announcements', (req, res, next) => {
   }
 });
 
-router.patch('/admin/announcements/:announcementId', (req, res, next) => {
+router.patch('/admin/announcements/:announcementId', announcementAttachmentUpload.array('attachmentFiles', 8), (req, res, next) => {
   try {
     const announcementId = Number(req.params.announcementId);
     if (!Number.isInteger(announcementId) || announcementId <= 0) {
@@ -1126,6 +2003,7 @@ router.patch('/admin/announcements/:announcementId', (req, res, next) => {
       content: req.body.content,
       isPublished: optionalBoolean(req.body.isPublished)
     });
+    const removeAttachmentIds = parseIdList(req.body.removeAttachmentIds, 'removeAttachmentIds');
 
     const current = db
       .prepare(
@@ -1133,7 +2011,9 @@ router.patch('/admin/announcements/:announcementId', (req, res, next) => {
            id,
            title,
            content,
-           is_published AS isPublished
+           attachment_path AS attachmentPath,
+           is_published AS isPublished,
+           published_at AS publishedAt
          FROM announcements
          WHERE id = ?`
       )
@@ -1142,43 +2022,150 @@ router.patch('/admin/announcements/:announcementId', (req, res, next) => {
       throw new HttpError(404, 'Announcement not found');
     }
 
+    const nextPublished =
+      input.isPublished === undefined ? Boolean(current.isPublished) : Boolean(input.isPublished);
+    const nowUtc = currentUtcIsoString();
+    const nextPublishedAt = nextPublished
+      ? current.publishedAt || nowUtc
+      : null;
+
     db.prepare(
       `UPDATE announcements
        SET
          title = ?,
          content = ?,
          is_published = ?,
-         updated_at = CURRENT_TIMESTAMP
+         published_at = ?,
+         updated_at = ?
        WHERE id = ?`
     ).run(
       input.title ?? current.title,
       input.content ?? current.content,
-      input.isPublished === undefined ? current.isPublished : (input.isPublished ? 1 : 0),
+      nextPublished ? 1 : 0,
+      nextPublishedAt,
+      nowUtc,
       announcementId
     );
 
-    const updated = db
+    deleteContentAttachmentRows('announcement', announcementId, removeAttachmentIds);
+    insertContentAttachmentRows('announcement', announcementId, req.files, req.user.id);
+    syncAnnouncementAttachmentPath(announcementId);
+
+    const updated = attachContentAttachments(
+      db,
+      'announcement',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               attachment_path AS attachmentPath,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM announcements
+             WHERE id = ?`
+          )
+          .get(announcementId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+
+    if (!Boolean(current.isPublished) && nextPublished) {
+      const memberIds = db
+        .prepare("SELECT id FROM users WHERE role = 'member' AND is_active = 1")
+        .all()
+        .map((row) => row.id);
+      notifyUsers({
+        userIds: memberIds,
+        subject: `[NJU林泉钢琴社公告] ${updated.title}`,
+        content: updated.content,
+        relatedType: 'announcement',
+        relatedId: announcementId
+      }).catch((notifyErr) => {
+        console.warn('Announcement publish notification failed:', notifyErr);
+      });
+    }
+
+    res.json({
+      ...serializePublishingItem(updated),
+      isPublished: Boolean(updated.isPublished)
+    });
+  } catch (err) {
+    cleanupUploadedFiles(req.files);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid announcement update payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.delete('/admin/announcements/:announcementId/attachments/:attachmentId', (req, res, next) => {
+  try {
+    const announcementId = Number(req.params.announcementId);
+    const attachmentId = Number(req.params.attachmentId);
+    if (!Number.isInteger(announcementId) || announcementId <= 0) {
+      throw new HttpError(400, 'Invalid announcementId');
+    }
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+      throw new HttpError(400, 'Invalid attachmentId');
+    }
+
+    const current = db
       .prepare(
         `SELECT
            id,
            title,
            content,
+           attachment_path AS attachmentPath,
            is_published AS isPublished,
+           published_at AS publishedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
          FROM announcements
          WHERE id = ?`
       )
       .get(announcementId);
+    if (!current) {
+      throw new HttpError(404, 'Announcement not found');
+    }
 
-    res.json({
-      ...updated,
-      isPublished: Boolean(updated.isPublished)
+    deleteContentAttachmentRows('announcement', announcementId, [attachmentId]);
+    db.prepare('UPDATE announcements SET updated_at = ? WHERE id = ?').run(currentUtcIsoString(), announcementId);
+    syncAnnouncementAttachmentPath(announcementId);
+    const updated = attachContentAttachments(
+      db,
+      'announcement',
+      [
+        db
+          .prepare(
+            `SELECT
+               id,
+               title,
+               content,
+               attachment_path AS attachmentPath,
+               is_published AS isPublished,
+               published_at AS publishedAt,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+             FROM announcements
+             WHERE id = ?`
+          )
+          .get(announcementId)
+      ],
+      { primaryField: 'attachmentPath' }
+    )[0];
+    return res.json({
+      message: 'Announcement attachment deleted',
+      item: serializePublishingItem({
+        ...updated,
+        isPublished: Boolean(updated.isPublished)
+      })
     });
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: 'Invalid announcement update payload', details: err.issues });
-    }
     return next(err);
   }
 });
@@ -1190,10 +2177,19 @@ router.delete('/admin/announcements/:announcementId', (req, res, next) => {
       throw new HttpError(400, 'Invalid announcementId');
     }
 
+    const existing = db
+      .prepare('SELECT id, attachment_path AS attachmentPath FROM announcements WHERE id = ?')
+      .get(announcementId);
+    if (!existing) {
+      throw new HttpError(404, 'Announcement not found');
+    }
+
     const result = db.prepare('DELETE FROM announcements WHERE id = ?').run(announcementId);
     if (result.changes === 0) {
       throw new HttpError(404, 'Announcement not found');
     }
+
+    deleteAllContentAttachments('announcement', announcementId);
     res.json({ message: 'Announcement deleted', announcementId });
   } catch (err) {
     next(err);
@@ -1204,7 +2200,7 @@ router.post('/admin/semesters', (req, res, next) => {
   try {
     const input = semesterSchema.parse(req.body);
     if (input.endDate < input.startDate) {
-      throw new HttpError(400, 'endDate must be after startDate');
+      throw new HttpError(400, 'End date must be on or after the start date');
     }
 
     const tx = db.transaction(() => {
@@ -1237,35 +2233,132 @@ router.post('/admin/semesters', (req, res, next) => {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid semester payload', details: err.issues });
     }
+    if (isSqliteUniqueConstraint(err, 'semesters', 'name')) {
+      return res.status(409).json({ message: 'A semester with this name already exists. Please choose a different name.' });
+    }
+    return next(err);
+  }
+});
+
+router.get('/admin/semesters', (req, res, next) => {
+  try {
+    const items = listSemesterRows();
+    return res.json({
+      items,
+      currentSemesterId: items.find((item) => item.isActive)?.id || null
+    });
+  } catch (err) {
     return next(err);
   }
 });
 
 router.get('/admin/semesters/current', (req, res, next) => {
   try {
-    const row = db
-      .prepare(
-        `SELECT
-           id,
-           name,
-           start_date AS startDate,
-           end_date AS endDate,
-           is_active AS isActive
-         FROM semesters
-         WHERE is_active = 1
-         ORDER BY id DESC
-         LIMIT 1`
-      )
-      .get();
+    const row = getSemesterRow(getActiveSemesterId(db));
 
     if (!row) {
       return res.json({ item: null });
     }
-    return res.json({
-      item: {
-        ...row,
-        isActive: Boolean(row.isActive)
+    return res.json({ item: row });
+  } catch (err) {
+    if (err instanceof HttpError && err.statusCode === 400) {
+      return res.json({ item: null });
+    }
+    return next(err);
+  }
+});
+
+router.patch('/admin/semesters/:semesterId', (req, res, next) => {
+  try {
+    const semesterId = Number(req.params.semesterId);
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+      throw new HttpError(400, 'Invalid semesterId');
+    }
+    const input = semesterUpdateSchema.parse(req.body);
+    const current = getSemesterRow(semesterId);
+    if (!current) {
+      throw new HttpError(404, 'Semester not found');
+    }
+
+    const nextSemester = {
+      name: input.name ?? current.name,
+      startDate: input.startDate ?? current.startDate,
+      endDate: input.endDate ?? current.endDate,
+      activate: input.activate === undefined ? current.isActive : Boolean(input.activate)
+    };
+    if (nextSemester.endDate < nextSemester.startDate) {
+      throw new HttpError(400, 'End date must be on or after the start date');
+    }
+
+    const replacementSemesterId =
+      current.isActive && input.activate === false ? findReplacementSemesterId(semesterId) : null;
+    if (current.isActive && input.activate === false && !replacementSemesterId) {
+      throw new HttpError(400, 'At least one semester must stay active. Activate another semester first.');
+    }
+
+    db.transaction(() => {
+      if (input.activate === true) {
+        db.prepare('UPDATE semesters SET is_active = 0').run();
       }
+      db.prepare(
+        `UPDATE semesters
+         SET name = ?, start_date = ?, end_date = ?, is_active = ?
+         WHERE id = ?`
+      ).run(
+        nextSemester.name,
+        nextSemester.startDate,
+        nextSemester.endDate,
+        nextSemester.activate ? 1 : 0,
+        semesterId
+      );
+      if (replacementSemesterId) {
+        db.prepare('UPDATE semesters SET is_active = 1 WHERE id = ?').run(replacementSemesterId);
+      }
+    })();
+
+    return res.json({
+      item: getSemesterRow(semesterId),
+      replacementSemesterId
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid semester update payload', details: err.issues });
+    }
+    if (isSqliteUniqueConstraint(err, 'semesters', 'name')) {
+      return res.status(409).json({ message: 'A semester with this name already exists. Please choose a different name.' });
+    }
+    return next(err);
+  }
+});
+
+router.delete('/admin/semesters/:semesterId', (req, res, next) => {
+  try {
+    const semesterId = Number(req.params.semesterId);
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+      throw new HttpError(400, 'Invalid semesterId');
+    }
+    const current = getSemesterRow(semesterId);
+    if (!current) {
+      throw new HttpError(404, 'Semester not found');
+    }
+    const replacementSemesterId = current.isActive ? findReplacementSemesterId(semesterId) : null;
+    if (current.isActive && !replacementSemesterId) {
+      throw new HttpError(400, 'The active semester cannot be deleted until another semester is available to activate.');
+    }
+
+    db.transaction(() => {
+      const result = db.prepare('DELETE FROM semesters WHERE id = ?').run(semesterId);
+      if (result.changes === 0) {
+        throw new HttpError(404, 'Semester not found');
+      }
+      if (replacementSemesterId) {
+        db.prepare('UPDATE semesters SET is_active = 1 WHERE id = ?').run(replacementSemesterId);
+      }
+    })();
+
+    return res.json({
+      semesterId,
+      replacementSemesterId
     });
   } catch (err) {
     return next(err);
@@ -1343,21 +2436,11 @@ router.post('/admin/scheduling/update', (req, res, next) => {
 router.get('/admin/scheduling/proposed', (req, res, next) => {
   try {
     const semesterId = resolveSemesterId(db, req.query.semesterId);
-    const semester = db
-      .prepare(
-        `SELECT
-           id,
-           name,
-           start_date AS startDate,
-           end_date AS endDate,
-           is_active AS isActive
-         FROM semesters
-         WHERE id = ?`
-      )
-      .get(semesterId);
+    const semester = getSemesterRow(semesterId);
     const batch = getLatestProposedBatchForSemester(semesterId);
     const compliance = getScheduleCompliance(semesterId, batch?.id || null);
     const operations = listScheduleOperations(semesterId, batch?.id || null);
+    const preferenceSummary = getSchedulingPreferenceSummary(semesterId, batch?.id || null);
 
     const members = db
       .prepare(
@@ -1376,6 +2459,7 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
            ON sa.batch_id = ?
           AND sa.user_id = u.id
          WHERE u.role = 'member'
+           AND u.is_active = 1
          GROUP BY u.id, u.student_number, p.display_name
          HAVING COUNT(DISTINCT sp.id) > 0 OR COUNT(DISTINCT sa.id) > 0
          ORDER BY u.student_number ASC`
@@ -1385,15 +2469,14 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
     if (!batch) {
       return res.json({
         semesterId,
-        semester: semester
-          ? { ...semester, isActive: Boolean(semester.isActive) }
-          : null,
+        semester,
         batch: null,
         assignments: [],
         members,
         unsatisfiedMembers: deriveUnsatisfiedMembers(members),
         compliance,
-        operations
+        operations,
+        preferenceSummary
       });
     }
 
@@ -1419,15 +2502,14 @@ router.get('/admin/scheduling/proposed', (req, res, next) => {
 
     return res.json({
       semesterId,
-      semester: semester
-        ? { ...semester, isActive: Boolean(semester.isActive) }
-        : null,
+      semester,
       batch,
       assignments,
       members,
       unsatisfiedMembers: deriveUnsatisfiedMembers(members),
       compliance,
-      operations
+      operations,
+      preferenceSummary
     });
   } catch (err) {
     return next(err);
@@ -1482,7 +2564,7 @@ router.post('/admin/scheduling/assignments', (req, res, next) => {
       .prepare(
         `SELECT id
          FROM users
-         WHERE id = ? AND role = 'member'`
+         WHERE id = ? AND role = 'member' AND is_active = 1`
       )
       .get(input.userId);
     if (!member) {
@@ -2023,7 +3105,8 @@ router.get('/admin/concerts', (req, res, next) => {
          LEFT JOIN profiles p ON p.user_id = u.id
          ORDER BY c.created_at DESC, c.id DESC`
       )
-      .all();
+      .all()
+      .map(serializeConcertItem);
 
     res.json({ items: rows });
   } catch (err) {
@@ -2035,15 +3118,16 @@ router.post('/admin/concerts', concertUpload.single('attachmentFile'), (req, res
   try {
     const input = createConcertSchema.parse({
       title: req.body.title,
-      description: optionalString(req.body.description),
-      announcement: optionalString(req.body.announcement),
-      applicationDeadline: optionalString(req.body.applicationDeadline),
-      status: req.body.status || 'draft'
+      description: req.body.description,
+      announcement: req.body.announcement,
+      applicationDeadline: req.body.applicationDeadline,
+      status: req.body.status
     });
 
     const attachmentPath = req.file
       ? toStoredUploadPath(req.file.path)
       : null;
+    const normalizedApplicationDeadline = normalizePublishingEventTimeInput(input.applicationDeadline);
 
     const result = db
       .prepare(
@@ -2056,7 +3140,7 @@ router.post('/admin/concerts', concertUpload.single('attachmentFile'), (req, res
         input.title,
         input.description ?? null,
         input.announcement ?? null,
-        input.applicationDeadline ?? null,
+        normalizedApplicationDeadline,
         input.status,
         attachmentPath,
         req.user.id
@@ -2080,8 +3164,9 @@ router.post('/admin/concerts', concertUpload.single('attachmentFile'), (req, res
       )
       .get(concertId);
 
-    res.status(201).json(created);
+    res.status(201).json(serializeConcertItem(created));
   } catch (err) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid concert payload', details: err.issues });
     }
@@ -2098,9 +3183,9 @@ router.patch('/admin/concerts/:concertId', concertUpload.single('attachmentFile'
 
     const input = updateConcertSchema.parse({
       title: req.body.title,
-      description: optionalString(req.body.description),
-      announcement: optionalString(req.body.announcement),
-      applicationDeadline: optionalString(req.body.applicationDeadline),
+      description: req.body.description,
+      announcement: req.body.announcement,
+      applicationDeadline: req.body.applicationDeadline,
       status: req.body.status,
       removeAttachment: optionalBoolean(req.body.removeAttachment)
     });
@@ -2128,6 +3213,16 @@ router.patch('/admin/concerts/:concertId', concertUpload.single('attachmentFile'
       : input.removeAttachment
         ? null
         : existing.attachmentPath;
+    const nextApplicationDeadline =
+      input.applicationDeadline === undefined
+        ? existing.applicationDeadline
+        : normalizePublishingEventTimeInput(input.applicationDeadline);
+    const replacedAttachmentPath =
+      req.file && existing.attachmentPath && existing.attachmentPath !== nextAttachmentPath
+        ? existing.attachmentPath
+        : !req.file && input.removeAttachment && existing.attachmentPath
+          ? existing.attachmentPath
+          : null;
 
     const result = db
       .prepare(
@@ -2146,7 +3241,7 @@ router.patch('/admin/concerts/:concertId', concertUpload.single('attachmentFile'
         input.title ?? existing.title,
         input.description === undefined ? existing.description : input.description,
         input.announcement === undefined ? existing.announcement : input.announcement,
-        input.applicationDeadline === undefined ? existing.applicationDeadline : input.applicationDeadline,
+        nextApplicationDeadline,
         input.status ?? existing.status,
         nextAttachmentPath,
         concertId
@@ -2172,8 +3267,13 @@ router.patch('/admin/concerts/:concertId', concertUpload.single('attachmentFile'
       )
       .get(concertId);
 
-    res.json(updated);
+    if (replacedAttachmentPath) {
+      removeManagedUploadFile(replacedAttachmentPath);
+    }
+
+    res.json(serializeConcertItem(updated));
   } catch (err) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid concert update payload', details: err.issues });
     }
@@ -2187,7 +3287,7 @@ router.patch('/admin/concerts/:concertId/status', (req, res, next) => {
     if (!Number.isInteger(concertId) || concertId <= 0) {
       throw new HttpError(400, 'Invalid concertId');
     }
-    const status = z.enum(['draft', 'open', 'audition', 'result', 'closed']).parse(req.body.status);
+    const status = z.enum(['draft', 'open', 'closed']).parse(req.body.status);
 
     const result = db
       .prepare(
@@ -2217,24 +3317,40 @@ router.delete('/admin/concerts/:concertId', async (req, res, next) => {
     }
 
     const existing = db
-      .prepare('SELECT id, attachment_path AS attachmentPath FROM concerts WHERE id = ?')
+      .prepare(
+        `SELECT
+           id,
+           attachment_path AS attachmentPath
+         FROM concerts
+         WHERE id = ?`
+      )
       .get(concertId);
-      
     if (!existing) {
       throw new HttpError(404, 'Concert not found');
     }
 
-    db.prepare('DELETE FROM concerts WHERE id = ?').run(concertId);
+    const applicationFiles = db
+      .prepare(
+        `SELECT score_file_path AS scoreFilePath
+         FROM concert_applications
+         WHERE concert_id = ? AND score_file_path IS NOT NULL`
+      )
+      .all(concertId)
+      .map((item) => item.scoreFilePath)
+      .filter(Boolean);
 
-    if (existing.attachmentPath) {
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM concert_applications WHERE concert_id = ?').run(concertId);
+      db.prepare('DELETE FROM concerts WHERE id = ?').run(concertId);
+    });
+    tx();
+
+    const filesToDelete = [existing.attachmentPath, ...applicationFiles].filter(Boolean);
+    for (const filePath of filesToDelete) {
       try {
-        const fileName = path.basename(existing.attachmentPath);
-        const fullPath = path.join(uploadRoot, 'concerts', fileName);
-        if (fs.existsSync(fullPath)) {
-          fs.unlinkSync(fullPath);
-        }
+        removeManagedUploadFile(filePath);
       } catch (fileErr) {
-        console.warn('Failed to delete concert attachment file:', fileErr);
+        console.warn('Failed to delete concert related file:', fileErr);
       }
     }
 
@@ -2285,10 +3401,7 @@ router.get('/admin/concerts/:concertId/applications', (req, res, next) => {
          ORDER BY ca.created_at DESC, ca.id DESC`
       )
       .all(concertId)
-      .map((item) => ({
-        ...item,
-        scoreFilePath: toPublicPath(item.scoreFilePath)
-      }));
+      .map(serializeConcertApplicationItem);
 
     return res.json({ items: rows });
   } catch (err) {
@@ -2343,10 +3456,7 @@ router.get('/admin/concerts/:concertId/applications/export', (req, res, next) =>
          ORDER BY ca.created_at DESC, ca.id DESC`
       )
       .all(concertId)
-      .map((item) => ({
-        ...item,
-        scoreFilePath: toPublicPath(item.scoreFilePath)
-      }));
+      .map(serializeConcertApplicationItem);
 
     const lines = [];
     lines.push(
@@ -2439,7 +3549,7 @@ router.post('/admin/concerts/:concertId/release', async (req, res, next) => {
     ).run(concertId);
 
     const memberIds = db
-      .prepare("SELECT id FROM users WHERE role = 'member'")
+      .prepare("SELECT id FROM users WHERE role = 'member' AND is_active = 1")
       .all()
       .map((row) => row.id);
 
@@ -2464,111 +3574,6 @@ router.post('/admin/concerts/:concertId/release', async (req, res, next) => {
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid release payload', details: err.issues });
-    }
-    return next(err);
-  }
-});
-
-router.post('/admin/concerts/:concertId/auditions', (req, res, next) => {
-  try {
-    const concertId = Number(req.params.concertId);
-    if (!Number.isInteger(concertId) || concertId <= 0) {
-      throw new HttpError(400, 'Invalid concertId');
-    }
-
-    const input = createAuditionSchema.parse({
-      applicationId: req.body.applicationId ? Number(req.body.applicationId) : undefined,
-      startTime: req.body.startTime,
-      endTime: req.body.endTime,
-      location: req.body.location
-    });
-
-    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
-    if (!concert) {
-      throw new HttpError(404, 'Concert not found');
-    }
-
-    if (input.applicationId) {
-      const application = db
-        .prepare(
-          'SELECT id FROM concert_applications WHERE id = ? AND concert_id = ?'
-        )
-        .get(input.applicationId, concertId);
-      if (!application) {
-        throw new HttpError(400, 'Application does not belong to this concert');
-      }
-    }
-
-    const result = db
-      .prepare(
-        `INSERT INTO audition_slots (concert_id, application_id, start_time, end_time, location, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        concertId,
-        input.applicationId || null,
-        input.startTime,
-        input.endTime,
-        input.location || null,
-        req.user.id
-      );
-
-    res.status(201).json({ id: Number(result.lastInsertRowid) });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: 'Invalid audition payload', details: err.issues });
-    }
-    return next(err);
-  }
-});
-
-router.post('/admin/concerts/:concertId/results', async (req, res, next) => {
-  try {
-    const concertId = Number(req.params.concertId);
-    if (!Number.isInteger(concertId) || concertId <= 0) {
-      throw new HttpError(400, 'Invalid concertId');
-    }
-
-    const input = publishResultSchema.parse({
-      applicationId: Number(req.body.applicationId),
-      status: req.body.status,
-      feedback: req.body.feedback
-    });
-
-    const application = db
-      .prepare(
-        `SELECT id, user_id AS userId
-         FROM concert_applications
-         WHERE id = ? AND concert_id = ?`
-      )
-      .get(input.applicationId, concertId);
-    if (!application) {
-      throw new HttpError(404, 'Concert application not found');
-    }
-
-    db.prepare(
-      `UPDATE concert_applications
-       SET status = ?, feedback = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
-    ).run(input.status, input.feedback || null, input.applicationId);
-
-    const notifyResult = await notifyUsers({
-      userIds: [application.userId],
-      subject: 'NJU林泉钢琴社审核结果已更新',
-      content: `你的音乐会申请结果已更新为 "${input.status}"，请登录查看详细反馈。`,
-      relatedType: 'concert_application',
-      relatedId: input.applicationId
-    });
-
-    res.json({
-      message: 'Concert result published',
-      applicationId: input.applicationId,
-      status: input.status,
-      notification: notifyResult
-    });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: 'Invalid result payload', details: err.issues });
     }
     return next(err);
   }

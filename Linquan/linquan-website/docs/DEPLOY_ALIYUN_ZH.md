@@ -19,7 +19,7 @@ ssh root@139.196.227.208
 
 ```bash
 cd /opt
-git clone <YOUR_REPO_URL> linquan-deploy
+git clone git@github.com:SWzei/NJU.git linquan-deploy
 cd /opt/linquan-deploy/Linquan/linquan-website
 bash deploy/aliyun/01_init_server.sh
 ```
@@ -49,7 +49,7 @@ DB_NAME=linquan DB_USER=linquan_app DB_PASS='<STRONG_PASSWORD>' bash deploy/aliy
 
 ```bash
 cd /opt/linquan-deploy/Linquan/linquan-website
-REPO_URL=<YOUR_REPO_URL> BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/03_deploy_app.sh
+REPO_URL=git@github.com:SWzei/NJU.git BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/03_deploy_app.sh
 ```
 
 首次执行会自动创建 `backend/.env`（来自模板），然后提示你编辑。
@@ -84,7 +84,7 @@ vim /var/www/linquan/repo/Linquan/linquan-website/backend/.env
 
 ```bash
 cd /var/www/linquan/repo/Linquan/linquan-website
-REPO_URL=<YOUR_REPO_URL> BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/03_deploy_app.sh
+REPO_URL=git@github.com:SWzei/NJU.git BRANCH=main PROJECT_SUBDIR=Linquan/linquan-website bash deploy/aliyun/03_deploy_app.sh
 ```
 
 ## 4. Nginx 反向代理

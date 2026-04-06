@@ -54,7 +54,6 @@ pnpm-debug.log*
 
 # =========================
 # Linquan website runtime uploads
-# Covers both linquan-website and linquan-website-v2.
 # =========================
-/Linquan/linquan-website*/backend/uploads/
-/Linquan/linquan-website*/uploads/
+/Linquan/linquan-website/backend/uploads/
+/Linquan/linquan-website/uploads/

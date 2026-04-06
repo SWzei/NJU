@@ -23,6 +23,13 @@ pool.on('error', (err) => {
   console.error('Postgres pool error:', err.message);
 });
 
+pool.on('connect', (client) => {
+  client.query("SET TIME ZONE 'UTC'").catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Failed to set Postgres session timezone:', err.message);
+  });
+});
+
 function writeResponse(sab, payload, statusCode) {
   const header = new Int32Array(sab, 0, 2);
   const body = new Uint8Array(sab, 8);

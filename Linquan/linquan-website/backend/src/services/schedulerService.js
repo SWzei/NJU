@@ -79,7 +79,7 @@ function loadScheduleContext(semesterId) {
       `SELECT DISTINCT u.id AS user_id
        FROM users u
        JOIN slot_preferences sp ON sp.user_id = u.id
-       WHERE sp.semester_id = ? AND u.role = 'member'
+       WHERE sp.semester_id = ? AND u.role = 'member' AND u.is_active = 1
        ORDER BY u.id`
     )
     .all(semesterId);
@@ -90,9 +90,21 @@ function loadScheduleContext(semesterId) {
   const preferences = db
     .prepare('SELECT user_id, slot_id FROM slot_preferences WHERE semester_id = ?')
     .all(semesterId);
+  const userSettingsRows = db
+    .prepare(
+      `SELECT user_id, class_matching_priority
+       FROM schedule_user_settings
+       WHERE semester_id = ?`
+    )
+    .all(semesterId);
 
   const validSlotIds = new Set(slotRows.map((slot) => slot.id));
   const slotMeta = new Map(slotRows.map((slot) => [slot.id, slot]));
+  const classMatchingPriorityUsers = new Set(
+    userSettingsRows
+      .filter((row) => Number(row.class_matching_priority) === 1)
+      .map((row) => row.user_id)
+  );
   const slotDemand = new Map();
   for (const pref of preferences) {
     if (validSlotIds.has(pref.slot_id)) {
@@ -107,7 +119,8 @@ function loadScheduleContext(semesterId) {
     members,
     memberPrefs,
     slotMeta,
-    slotDemand
+    slotDemand,
+    classMatchingPriorityUsers
   };
 }
 
@@ -130,8 +143,20 @@ function addAssignmentsFromRows(assignmentsByUser, rows) {
   return occupiedSlotIds;
 }
 
-function runPhaseOne({ members, memberPrefs, availableSlots, slotDemand, assignmentsByUser }) {
+function runPhaseOne({
+  members,
+  memberPrefs,
+  availableSlots,
+  slotDemand,
+  assignmentsByUser,
+  classMatchingPriorityUsers
+}) {
   const phase1Members = [...members].sort((a, b) => {
+    const priorityDiff =
+      Number(classMatchingPriorityUsers.has(b.user_id)) - Number(classMatchingPriorityUsers.has(a.user_id));
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
     const prefDiff = memberPrefs.get(a.user_id).size - memberPrefs.get(b.user_id).size;
     if (prefDiff !== 0) {
       return prefDiff;
@@ -219,7 +244,7 @@ function summarizeAssignments({ assignmentsByUser, totalMembers, totalSlots }) {
 
 export function generateProposedSchedule({ semesterId, adminId }) {
   const context = loadScheduleContext(semesterId);
-  const { slotRows, members, memberPrefs, slotMeta, slotDemand } = context;
+  const { slotRows, members, memberPrefs, slotMeta, slotDemand, classMatchingPriorityUsers } = context;
 
   const assignmentsByUser = createAssignmentMap(members);
   const availableSlots = new Set(slotRows.map((slot) => slot.id));
@@ -229,7 +254,8 @@ export function generateProposedSchedule({ semesterId, adminId }) {
     memberPrefs,
     availableSlots,
     slotDemand,
-    assignmentsByUser
+    assignmentsByUser,
+    classMatchingPriorityUsers
   });
   runPhaseTwo({
     members,
@@ -289,7 +315,7 @@ export function generateProposedSchedule({ semesterId, adminId }) {
 
 export function updateProposedSchedule({ semesterId, adminId }) {
   const context = loadScheduleContext(semesterId);
-  const { slotRows, members, memberPrefs, slotMeta, slotDemand } = context;
+  const { slotRows, members, memberPrefs, slotMeta, slotDemand, classMatchingPriorityUsers } = context;
 
   const latestProposedBatch = db
     .prepare(
@@ -332,7 +358,8 @@ export function updateProposedSchedule({ semesterId, adminId }) {
     memberPrefs,
     availableSlots,
     slotDemand,
-    assignmentsByUser
+    assignmentsByUser,
+    classMatchingPriorityUsers
   });
   runPhaseTwo({
     members,

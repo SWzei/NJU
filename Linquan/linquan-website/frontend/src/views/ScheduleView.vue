@@ -2,9 +2,32 @@
   <section class="grid-2">
     <article class="card panel">
       <h2 class="section-title">{{ t('schedule.title') }}</h2>
-      <p class="subtle">
-        {{ t('schedule.subtitle') }}
+      <p class="subtle">{{ t('schedule.subtitle') }}</p>
+
+      <div class="field semester-field">
+        <label>{{ t('schedule.semesterSelect') }}</label>
+        <select v-model.number="selectedSemesterId" :disabled="loadingSemesters || semesters.length === 0">
+          <option :value="0">{{ t('common.choose') }}</option>
+          <option v-for="item in semesters" :key="item.id" :value="item.id">
+            {{ item.name }}
+          </option>
+        </select>
+      </div>
+
+      <p v-if="currentSemester" class="subtle semester-note">
+        {{ t('schedule.currentSemesterInfo', {
+          name: currentSemester.name,
+          start: currentSemester.startDate,
+          end: currentSemester.endDate
+        }) }}
       </p>
+      <p v-else class="subtle semester-note">{{ t('schedule.noSemesters') }}</p>
+
+      <label class="toggle class-matching-toggle" v-if="selectedSemesterId">
+        <input type="checkbox" v-model="classMatchingPriority" />
+        {{ t('schedule.classMatchingPriority') }}
+      </label>
+      <p v-if="selectedSemesterId" class="subtle">{{ t('schedule.classMatchingPriorityHint') }}</p>
 
       <div class="days">
         <section v-for="day in days" :key="day.value" class="day-card">
@@ -47,7 +70,7 @@
       </div>
 
       <div class="row">
-        <button class="btn" @click="submitPreferences" :disabled="saving">
+        <button class="btn" @click="submitPreferences" :disabled="saving || !selectedSemesterId">
           {{ saving ? t('schedule.saving') : t('schedule.save') }}
         </button>
         <span class="subtle">{{ t('schedule.selectedSlots', { count: selectedSlotIds.length }) }}</span>
@@ -69,7 +92,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
@@ -97,10 +120,18 @@ const daysByValue = computed(() => {
 
 const hours = Array.from({ length: 14 }, (_, index) => 8 + index);
 
+const semesters = ref([]);
+const selectedSemesterId = ref(0);
+const loadingSemesters = ref(false);
 const slots = ref([]);
 const selectedSlotIds = ref([]);
 const assignmentList = ref([]);
 const saving = ref(false);
+const classMatchingPriority = ref(false);
+
+const currentSemester = computed(
+  () => semesters.value.find((item) => item.id === selectedSemesterId.value) || null
+);
 
 const slotMap = computed(() => {
   const map = new Map();
@@ -130,26 +161,77 @@ function toggleSlot(slotId, checked) {
   selectedSlotIds.value = selectedSlotIds.value.filter((id) => id !== slotId);
 }
 
+async function loadSemesters() {
+  loadingSemesters.value = true;
+  try {
+    const { data } = await api.get('/scheduling/semesters');
+    semesters.value = data.items || [];
+    if (semesters.value.length === 0) {
+      selectedSemesterId.value = 0;
+      return;
+    }
+    if (!semesters.value.some((item) => item.id === selectedSemesterId.value)) {
+      selectedSemesterId.value = Number(data.currentSemesterId || semesters.value[0]?.id || 0);
+    }
+  } finally {
+    loadingSemesters.value = false;
+  }
+}
+
 async function loadSlots() {
-  const { data } = await api.get('/scheduling/slots');
+  if (!selectedSemesterId.value) {
+    slots.value = [];
+    selectedSlotIds.value = [];
+    classMatchingPriority.value = false;
+    return;
+  }
+  const { data } = await api.get('/scheduling/slots', {
+    params: { semesterId: selectedSemesterId.value }
+  });
   slots.value = data.items || [];
+  classMatchingPriority.value = Boolean(data.classMatchingPriority);
   selectedSlotIds.value = slots.value
     .filter((slot) => Number(slot.selectedByMe) === 1)
     .map((slot) => slot.id);
 }
 
 async function loadAssignment() {
-  const { data } = await api.get('/scheduling/my-assignment');
+  if (!selectedSemesterId.value) {
+    assignmentList.value = [];
+    return;
+  }
+  const { data } = await api.get('/scheduling/my-assignment', {
+    params: { semesterId: selectedSemesterId.value }
+  });
   assignmentList.value = data.assignments || [];
 }
 
+async function loadScheduleData() {
+  if (!selectedSemesterId.value) {
+    slots.value = [];
+    selectedSlotIds.value = [];
+    assignmentList.value = [];
+    classMatchingPriority.value = false;
+    return;
+  }
+  await Promise.all([loadSlots(), loadAssignment()]);
+}
+
 async function submitPreferences() {
+  if (!selectedSemesterId.value) {
+    showError(t('schedule.noSemesters'));
+    return;
+  }
   if (!window.confirm(t('schedule.confirmSave'))) {
     return;
   }
   saving.value = true;
   try {
-    await api.post('/scheduling/preferences', { slotIds: selectedSlotIds.value });
+    await api.post('/scheduling/preferences', {
+      semesterId: selectedSemesterId.value,
+      slotIds: selectedSlotIds.value,
+      classMatchingPriority: classMatchingPriority.value
+    });
     showSuccess(t('schedule.saveSuccess'));
     await loadSlots();
   } catch (err) {
@@ -159,9 +241,18 @@ async function submitPreferences() {
   }
 }
 
+watch(selectedSemesterId, async () => {
+  try {
+    await loadScheduleData();
+  } catch (err) {
+    showError(err, t('schedule.loadFailed'));
+  }
+});
+
 onMounted(async () => {
   try {
-    await Promise.all([loadSlots(), loadAssignment()]);
+    await loadSemesters();
+    await loadScheduleData();
   } catch (err) {
     showError(err, t('schedule.loadFailed'));
   }
@@ -171,6 +262,14 @@ onMounted(async () => {
 <style scoped>
 .panel {
   padding: 1rem;
+}
+
+.semester-field {
+  max-width: 320px;
+}
+
+.semester-note {
+  margin-top: 0.4rem;
 }
 
 .days {
@@ -215,5 +314,18 @@ onMounted(async () => {
   border-radius: 10px;
   background: var(--panel-soft);
   padding: 0.65rem;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.class-matching-toggle {
+  margin-top: 0.85rem;
 }
 </style>

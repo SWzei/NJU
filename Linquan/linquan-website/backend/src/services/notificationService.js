@@ -20,7 +20,9 @@ export async function notifyUsers({
   const placeholders = uniqueUserIds.map(() => '?').join(', ');
   const users = db
     .prepare(
-      `SELECT id, email FROM users WHERE id IN (${placeholders})`
+      `SELECT id, email
+       FROM users
+       WHERE id IN (${placeholders}) AND is_active = 1`
     )
     .all(...uniqueUserIds);
 

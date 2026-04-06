@@ -9,6 +9,7 @@ import profileRoutes from './routes/profileRoutes.js';
 import schedulingRoutes from './routes/schedulingRoutes.js';
 import concertRoutes from './routes/concertRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import classMatchingRoutes from './routes/classMatchingRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -46,6 +47,7 @@ app.use('/api', activityRoutes);
 app.use('/api', profileRoutes);
 app.use('/api', schedulingRoutes);
 app.use('/api', concertRoutes);
+app.use('/api', classMatchingRoutes);
 app.use('/api', adminRoutes);
 
 const frontendDistCandidates = [

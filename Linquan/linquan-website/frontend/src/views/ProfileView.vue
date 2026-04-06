@@ -32,7 +32,7 @@
       </div>
       <div class="field">
         <label>{{ t('profile.bio') }}</label>
-        <textarea v-model.trim="form.bio" />
+        <textarea v-model="form.bio" />
       </div>
       <div class="row">
         <div class="field field-half">
@@ -60,11 +60,11 @@
       </div>
       <div class="field">
         <label>{{ t('profile.hobbies') }}</label>
-        <textarea v-model.trim="form.hobbies" :placeholder="t('profile.hobbiesPlaceholder')" />
+        <textarea v-model="form.hobbies" :placeholder="t('profile.hobbiesPlaceholder')" />
       </div>
       <div class="field">
         <label>{{ t('profile.pianoInterests') }}</label>
-        <textarea v-model.trim="form.pianoInterests" :placeholder="t('profile.pianoInterestsPlaceholder')" />
+        <textarea v-model="form.pianoInterests" :placeholder="t('profile.pianoInterestsPlaceholder')" />
       </div>
       <button class="btn" :disabled="saving">{{ saving ? t('profile.saving') : t('profile.save') }}</button>
     </form>

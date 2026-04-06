@@ -113,7 +113,8 @@ router.post('/login', (req, res, next) => {
       .prepare(
         `SELECT id, student_number, email, password_hash, role
          FROM users
-         WHERE student_number = ? OR email = ?`
+         WHERE is_active = 1
+           AND (student_number = ? OR email = ?)`
       )
       .get(input.credential, input.credential);
 
