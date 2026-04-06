@@ -39,11 +39,16 @@ function showSuccess(text, duration = 2200) {
   showToast(text, 'success', duration);
 }
 
+function isInternalErrorMessage(text) {
+  return /SQLITE_|constraint failed|better-sqlite3|no such table|syntax error/i.test(String(text || ''));
+}
+
 function showError(err, fallback = '') {
-  const text =
+  const rawText =
     typeof err === 'string'
       ? err
       : err?.response?.data?.message || (fallback ? String(fallback) : '');
+  const text = fallback && isInternalErrorMessage(rawText) ? String(fallback) : rawText;
   showToast(text, 'error', 2800);
 }
 

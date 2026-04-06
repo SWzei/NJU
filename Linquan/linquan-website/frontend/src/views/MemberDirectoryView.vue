@@ -16,7 +16,7 @@
               {{ item.academy || t('profile.academyUnset') }} · {{ item.major || t('profile.majorUnset') }} ·
               {{ item.grade || t('profile.gradeUnset') }}
             </p>
-            <p>{{ item.bio || t('profile.noIntro') }}</p>
+            <p class="multiline-text">{{ item.bio || t('profile.noIntro') }}</p>
           </div>
         </router-link>
       </li>
@@ -132,6 +132,10 @@ onMounted(async () => {
 <style scoped>
 .panel {
   padding: 1rem;
+}
+
+.multiline-text {
+  white-space: pre-wrap;
 }
 
 .directory {

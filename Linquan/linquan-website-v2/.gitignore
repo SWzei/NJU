@@ -1,5 +1,0 @@
-# Runtime data / uploads
-# `uploads/` covers both project-root `uploads/` and `backend/uploads/`.
-# =========================
-.tmp-ui-e2e/
-uploads/

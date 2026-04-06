@@ -36,11 +36,11 @@
       <div class="row">
         <div class="field field-half">
           <label>{{ t('admin.galleryDescZh') }}</label>
-          <input v-model.trim="createForm.descriptionZh" />
+          <textarea v-model="createForm.descriptionZh" rows="3" />
         </div>
         <div class="field field-half">
           <label>{{ t('admin.galleryDescEn') }}</label>
-          <input v-model.trim="createForm.descriptionEn" />
+          <textarea v-model="createForm.descriptionEn" rows="3" />
         </div>
       </div>
       <div class="row">
@@ -111,11 +111,11 @@
         <div class="row">
           <div class="field field-half">
             <label>{{ t('admin.galleryDescZh') }}</label>
-            <input v-model.trim="item.descriptionZh" />
+            <textarea v-model="item.descriptionZh" rows="3" />
           </div>
           <div class="field field-half">
             <label>{{ t('admin.galleryDescEn') }}</label>
-            <input v-model.trim="item.descriptionEn" />
+            <textarea v-model="item.descriptionEn" rows="3" />
           </div>
         </div>
 

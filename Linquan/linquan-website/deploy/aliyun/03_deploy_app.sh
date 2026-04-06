@@ -15,7 +15,7 @@ PROJECT_DIR="${REPO_DIR}/${PROJECT_SUBDIR}"
 
 if [[ -z "${REPO_URL}" ]]; then
   echo "REPO_URL is required. Example:"
-  echo "REPO_URL=https://github.com/<your-user>/NJU.git bash deploy/aliyun/03_deploy_app.sh"
+  echo "REPO_URL=git@github.com:SWzei/NJU.git bash deploy/aliyun/03_deploy_app.sh"
   exit 1
 fi
 

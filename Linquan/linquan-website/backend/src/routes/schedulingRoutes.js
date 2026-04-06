@@ -9,10 +9,40 @@ const router = express.Router();
 
 const preferenceSchema = z.object({
   semesterId: z.number().int().positive().optional(),
-  slotIds: z.array(z.number().int().positive()).max(500)
+  slotIds: z.array(z.number().int().positive()).max(500),
+  classMatchingPriority: z.boolean().optional()
 });
 
-router.use(authenticate);
+router.use('/scheduling', authenticate);
+
+router.get('/scheduling/semesters', (req, res, next) => {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT
+           id,
+           name,
+           start_date AS "startDate",
+           end_date AS "endDate",
+           is_active AS "isActive",
+           created_at AS "createdAt"
+         FROM semesters
+         ORDER BY is_active DESC, start_date DESC, id DESC`
+      )
+      .all()
+      .map((item) => ({
+        ...item,
+        isActive: Boolean(item.isActive)
+      }));
+
+    res.json({
+      items: rows,
+      currentSemesterId: rows.find((item) => item.isActive)?.id || null
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/scheduling/slots', (req, res, next) => {
   try {
@@ -26,7 +56,8 @@ router.get('/scheduling/slots', (req, res, next) => {
            rs.day_of_week AS "dayOfWeek",
            rs.hour,
            COALESCE(pref_counts.count, 0) AS "selectedCount",
-           CASE WHEN my_pref.id IS NULL THEN 0 ELSE 1 END AS "selectedByMe"
+           CASE WHEN my_pref.id IS NULL THEN 0 ELSE 1 END AS "selectedByMe",
+           COALESCE(settings.class_matching_priority, 0) AS "classMatchingPriority"
          FROM room_slots rs
          LEFT JOIN (
            SELECT slot_id, COUNT(*) AS count
@@ -38,12 +69,22 @@ router.get('/scheduling/slots', (req, res, next) => {
            ON my_pref.slot_id = rs.id
           AND my_pref.user_id = ?
           AND my_pref.semester_id = ?
+         LEFT JOIN schedule_user_settings settings
+           ON settings.user_id = ?
+          AND settings.semester_id = ?
          WHERE rs.semester_id = ?
          ORDER BY rs.day_of_week, rs.hour, rs.room_no`
       )
-      .all(semesterId, req.user.id, semesterId, semesterId);
+      .all(semesterId, req.user.id, semesterId, req.user.id, semesterId, semesterId);
 
-    res.json({ semesterId, items: rows });
+    res.json({
+      semesterId,
+      classMatchingPriority: Boolean(Number(rows[0]?.classMatchingPriority || 0)),
+      items: rows.map((item) => ({
+        ...item,
+        classMatchingPriority: undefined
+      }))
+    });
   } catch (err) {
     next(err);
   }
@@ -53,7 +94,14 @@ router.post('/scheduling/preferences', (req, res, next) => {
   try {
     const parsed = preferenceSchema.parse({
       semesterId: req.body.semesterId ? Number(req.body.semesterId) : undefined,
-      slotIds: Array.isArray(req.body.slotIds) ? req.body.slotIds.map((id) => Number(id)) : []
+      slotIds: Array.isArray(req.body.slotIds) ? req.body.slotIds.map((id) => Number(id)) : [],
+      classMatchingPriority:
+        req.body.classMatchingPriority === undefined
+          ? undefined
+          : req.body.classMatchingPriority === true
+            || req.body.classMatchingPriority === 'true'
+            || req.body.classMatchingPriority === 1
+            || req.body.classMatchingPriority === '1'
     });
 
     const semesterId = resolveSemesterId(db, parsed.semesterId);
@@ -84,6 +132,16 @@ router.post('/scheduling/preferences', (req, res, next) => {
       );
       for (const slotId of uniqueSlotIds) {
         insertStmt.run(semesterId, req.user.id, slotId);
+      }
+
+      if (parsed.classMatchingPriority !== undefined) {
+        const now = new Date().toISOString();
+        db.prepare(
+          `INSERT INTO schedule_user_settings (semester_id, user_id, class_matching_priority, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (semester_id, user_id)
+           DO UPDATE SET class_matching_priority = excluded.class_matching_priority, updated_at = excluded.updated_at`
+        ).run(semesterId, req.user.id, parsed.classMatchingPriority ? 1 : 0, now, now);
       }
     });
     tx();

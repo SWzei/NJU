@@ -1,124 +1,177 @@
 <template>
   <section class="grid-2">
-    <article class="card panel">
-      <h2 class="section-title">{{ t('admin.createConcert') }}</h2>
-      <form class="form" @submit.prevent="createConcert">
-        <div class="field">
-          <label>{{ t('admin.title') }}</label>
-          <input v-model.trim="createForm.title" required />
-        </div>
-        <div class="field">
-          <label>{{ t('admin.description') }}</label>
-          <textarea v-model.trim="createForm.description" />
-        </div>
-        <div class="field">
-          <label>{{ t('admin.announcement') }}</label>
-          <textarea v-model.trim="createForm.announcement" />
-        </div>
-        <div class="row">
-          <div class="field field-half">
-            <label>{{ t('admin.applicationDeadline') }}</label>
-            <input type="datetime-local" v-model="createForm.applicationDeadline" />
-            <p class="subtle">{{ t('admin.dateTimeGuide') }}</p>
-          </div>
-          <div class="field field-half">
-            <label>{{ t('common.status') }}</label>
-            <select v-model="createForm.status">
-              <option value="draft">{{ t('concertStatus.draft') }}</option>
-              <option value="open">{{ t('concertStatus.open') }}</option>
-              <option value="audition">{{ t('concertStatus.audition') }}</option>
-              <option value="result">{{ t('concertStatus.result') }}</option>
-              <option value="closed">{{ t('concertStatus.closed') }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label>{{ t('admin.attachmentFile') }}</label>
-          <input type="file" @change="onCreateFileChange" />
-        </div>
-        <button class="btn">{{ t('admin.createConcertButton') }}</button>
-      </form>
-    </article>
+    <ConcertEditorForm
+      :mode="formMode"
+      :form="editorForm"
+      :active-title="selectedConcert?.title || ''"
+      :current-attachment-path="selectedConcert?.attachmentPath || ''"
+      :selected-attachment-name="selectedAttachmentFile?.name || ''"
+      :remove-attachment="removeAttachment"
+      :release-message="releaseMessage"
+      :submitting="savingConcert"
+      :releasing="releasingConcert"
+      :deleting="deletingConcert"
+      :disabled="editorBusy"
+      :file-input-nonce="attachmentInputNonce"
+      :accept="concertAttachmentAccept"
+      @submit="submitConcertForm"
+      @release="releaseConcert"
+      @delete="deleteConcert"
+      @reset-mode="beginCreateMode"
+      @file-change="handleAttachmentFileChange"
+      @update:form="updateEditorForm"
+      @update:remove-attachment="removeAttachment = $event"
+      @update:release-message="releaseMessage = $event"
+    />
 
     <article class="card panel">
-      <h2 class="section-title">{{ t('admin.manageConcerts') }}</h2>
-      <ul class="concert-list">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">{{ t('admin.manageConcerts') }}</h2>
+          <p class="subtle">
+            {{ selectedConcert ? t('admin.currentConcertEditing', { title: selectedConcert.title }) : t('admin.currentConcertCreating') }}
+          </p>
+        </div>
+        <button class="btn secondary" type="button" :disabled="concertsLoading || editorBusy" @click="refreshConcerts">
+          {{ concertsLoading ? t('common.loading') : t('admin.refreshConcerts') }}
+        </button>
+      </div>
+
+      <ul v-if="concerts.length" class="concert-list">
         <li
           v-for="item in concerts"
           :key="item.id"
           :class="{ active: item.id === selectedConcertId }"
           @click="selectConcert(item.id)"
         >
-          <h3>{{ item.title }}</h3>
-          <p class="subtle">{{ t('common.status') }}: {{ t(`concertStatus.${item.status}`) }}</p>
+          <div class="concert-item-head">
+            <h3>{{ item.title }}</h3>
+            <span class="status-pill">{{ t(`concertStatus.${item.status}`) }}</span>
+          </div>
+          <p class="subtle" v-if="item.applicationDeadline">
+            {{ t('admin.applicationDeadline') }}: {{ formatDate(item.applicationDeadline) }}
+          </p>
+          <p class="subtle multiline-text">{{ item.announcement || item.description || t('concerts.noDetails') }}</p>
         </li>
       </ul>
-      <p v-if="concerts.length === 0" class="subtle">{{ t('admin.noConcertsAdmin') }}</p>
+      <p v-else-if="concertsLoading" class="subtle">{{ t('common.loading') }}</p>
+      <p v-else class="subtle">{{ t('admin.noConcertsAdmin') }}</p>
     </article>
   </section>
 
-  <section class="card panel section-space" v-if="selectedConcert">
-    <h2 class="section-title">{{ t('admin.editConcert') }} - {{ selectedConcert.title }}</h2>
-    <form class="form" @submit.prevent="saveConcert">
-      <div class="field">
-        <label>{{ t('admin.title') }}</label>
-        <input v-model.trim="editForm.title" required />
-      </div>
-      <div class="field">
-        <label>{{ t('admin.description') }}</label>
-        <textarea v-model.trim="editForm.description" />
-      </div>
-      <div class="field">
-        <label>{{ t('admin.announcement') }}</label>
-        <textarea v-model.trim="editForm.announcement" />
-      </div>
-      <div class="row">
-        <div class="field field-half">
-          <label>{{ t('admin.applicationDeadline') }}</label>
-          <input type="datetime-local" v-model="editForm.applicationDeadline" />
-          <p class="subtle">{{ t('admin.dateTimeGuide') }}</p>
+  <section class="grid-2 section-space">
+    <article class="card panel">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">{{ t('admin.registrationListTitle') }}</h2>
+          <p class="subtle">
+            {{ selectedConcert ? t('admin.registrationCount', { count: registrations.length }) : t('admin.registrationRequiresConcert') }}
+          </p>
+          <p v-if="selectedConcert && loadingRegistrations && registrations.length" class="subtle inline-loading">
+            {{ t('common.loading') }}
+          </p>
         </div>
-        <div class="field field-half">
-          <label>{{ t('common.status') }}</label>
-          <select v-model="editForm.status">
-            <option value="draft">{{ t('concertStatus.draft') }}</option>
-            <option value="open">{{ t('concertStatus.open') }}</option>
-            <option value="audition">{{ t('concertStatus.audition') }}</option>
-            <option value="result">{{ t('concertStatus.result') }}</option>
-            <option value="closed">{{ t('concertStatus.closed') }}</option>
-          </select>
+        <div class="row action-row">
+          <button
+            class="btn secondary"
+            type="button"
+            :disabled="!selectedConcertId || loadingRegistrations"
+            @click="loadRegistrations({ force: true, preserveExisting: true })"
+          >
+            {{ loadingRegistrations ? t('common.loading') : t('admin.loadRegistrations') }}
+          </button>
+          <button
+            class="btn secondary"
+            type="button"
+            :disabled="!selectedConcertId || downloadingRegistrationsCsv"
+            @click="downloadRegistrationsCsv"
+          >
+            {{ downloadingRegistrationsCsv ? t('common.loading') : t('admin.downloadRegistrationsCsv') }}
+          </button>
         </div>
       </div>
-      <div class="field">
-        <label>{{ t('admin.attachmentFile') }}</label>
-        <input type="file" @change="onEditFileChange" />
-      </div>
-      <p class="subtle" v-if="selectedConcert.attachmentPath">
-        <a :href="selectedConcert.attachmentPath" target="_blank" rel="noopener">
-          {{ t('admin.currentAttachment') }}
-        </a>
-      </p>
-      <label class="toggle">
-        <input type="checkbox" v-model="removeAttachment" />
-        {{ t('admin.removeAttachment') }}
-      </label>
-      <div class="row">
-        <button class="btn" type="submit">{{ t('admin.saveConcert') }}</button>
-        <button class="btn warn" type="button" @click="releaseConcert">{{ t('admin.releaseConcert') }}</button>
-        <button 
-          class="btn danger" 
-          style="background-color: #dc3545; border-color: #dc3545; color: white;" 
-          type="button" 
-          @click="deleteConcert"
+
+      <p v-if="!selectedConcert" class="subtle">{{ t('admin.registrationRequiresConcert') }}</p>
+      <p v-else-if="loadingRegistrations && registrations.length === 0" class="subtle">{{ t('common.loading') }}</p>
+      <p v-else-if="registrations.length === 0" class="subtle">{{ t('admin.noRegistrations') }}</p>
+
+      <div v-else class="registration-list">
+        <button
+          v-for="item in registrations"
+          :key="item.id"
+          type="button"
+          class="registration-item"
+          :class="{ active: item.id === selectedRegistrationId }"
+          @click="selectRegistration(item.id)"
         >
-          {{ t('admin.deleteConcert') }}
+          <h3>{{ item.applicantName || item.displayName }}</h3>
+          <p class="subtle">{{ item.applicantStudentNumber || item.studentNumber }}</p>
+          <p class="subtle multiline-text">{{ item.pieceZh || item.pieceTitle || '-' }}</p>
         </button>
       </div>
-      <div class="field">
-        <label>{{ t('admin.releaseMessage') }}</label>
-        <textarea v-model.trim="releaseMessage" />
-      </div>
-    </form>
+    </article>
+
+    <article class="card panel">
+      <h2 class="section-title">{{ t('admin.registrationDetailTitle') }}</h2>
+      <p v-if="!selectedConcert" class="subtle">{{ t('admin.registrationRequiresConcert') }}</p>
+      <p v-else-if="loadingRegistrations && registrations.length === 0" class="subtle">{{ t('common.loading') }}</p>
+      <p v-else-if="!selectedRegistration" class="subtle">{{ t('admin.registrationDetailEmpty') }}</p>
+
+      <template v-else>
+        <div class="detail-grid">
+          <div>
+            <span class="label">{{ t('common.name') }}</span>
+            <strong>{{ selectedRegistration.applicantName || selectedRegistration.displayName || '-' }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('common.student') }}</span>
+            <strong>{{ selectedRegistration.applicantStudentNumber || selectedRegistration.studentNumber || '-' }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('common.status') }}</span>
+            <strong>{{ t(`applicationStatus.${selectedRegistration.status}`) || selectedRegistration.status || '-' }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('concerts.durationMin') }}</span>
+            <strong>{{ selectedRegistration.durationMin ?? '-' }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('concerts.contactQq') }}</span>
+            <strong>{{ selectedRegistration.contactQq || '-' }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('admin.submittedAt') }}</span>
+            <strong>{{ formatDate(selectedRegistration.createdAt) }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('admin.updatedAt') }}</span>
+            <strong>{{ formatDate(selectedRegistration.updatedAt) }}</strong>
+          </div>
+          <div>
+            <span class="label">{{ t('admin.viewScoreFile') }}</span>
+            <strong v-if="selectedRegistration.scoreFilePath">
+              <a :href="selectedRegistration.scoreFilePath" target="_blank" rel="noopener">
+                {{ t('admin.viewScoreFile') }}
+              </a>
+            </strong>
+            <strong v-else>{{ t('concerts.noScoreFile') }}</strong>
+          </div>
+        </div>
+
+        <div class="field section-space">
+          <label>{{ t('concerts.pieceZh') }}</label>
+          <textarea :value="selectedRegistration.pieceZh || selectedRegistration.pieceTitle || ''" rows="3" readonly />
+        </div>
+        <div class="field">
+          <label>{{ t('concerts.pieceEn') }}</label>
+          <textarea :value="selectedRegistration.pieceEn || selectedRegistration.composer || ''" rows="3" readonly />
+        </div>
+        <div class="field" v-if="selectedRegistration.feedback">
+          <label>{{ t('common.feedback') }}</label>
+          <textarea :value="selectedRegistration.feedback" rows="4" readonly />
+        </div>
+      </template>
+    </article>
   </section>
 </template>
 
@@ -127,36 +180,81 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
+import ConcertEditorForm from '@/components/admin/ConcertEditorForm.vue';
+import { formatDateTimeInBeijing, utcIsoToBeijingInput } from '@/utils/dateTime';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const { showSuccess, showError } = useToast();
 
-const createForm = reactive({
-  title: '',
-  description: '',
-  announcement: '',
-  applicationDeadline: '',
-  status: 'draft'
-});
+const concertAttachmentAccept = '.pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.gif,.txt,.md,.csv,.xlsx,.xls,.ppt,.pptx';
 
-const editForm = reactive({
-  title: '',
-  description: '',
-  announcement: '',
-  applicationDeadline: '',
-  status: 'draft'
-});
+function createEmptyConcertForm() {
+  return {
+    title: '',
+    description: '',
+    announcement: '',
+    applicationDeadline: '',
+    status: 'draft'
+  };
+}
 
+const editorForm = reactive(createEmptyConcertForm());
 const concerts = ref([]);
 const selectedConcertId = ref(0);
-const createAttachmentFile = ref(null);
-const editAttachmentFile = ref(null);
+const selectedAttachmentFile = ref(null);
+const attachmentInputNonce = ref(0);
 const removeAttachment = ref(false);
 const releaseMessage = ref('');
-const { showSuccess, showError } = useToast();
+const registrations = ref([]);
+const selectedRegistrationId = ref(0);
+const loadingRegistrations = ref(false);
+const registrationsConcertId = ref(0);
+const editorBaseline = ref(createEmptyConcertForm());
+const concertsLoading = ref(false);
+const savingConcert = ref(false);
+const releasingConcert = ref(false);
+const deletingConcert = ref(false);
+const downloadingRegistrationsCsv = ref(false);
+
+let concertsRequestToken = 0;
+let registrationsRequestToken = 0;
+
+const editableConcertStatuses = new Set(['draft', 'open', 'closed']);
 
 const selectedConcert = computed(
   () => concerts.value.find((item) => item.id === selectedConcertId.value) || null
 );
+const selectedRegistration = computed(
+  () => registrations.value.find((item) => item.id === selectedRegistrationId.value) || null
+);
+const formMode = computed(() => (selectedConcert.value ? 'edit' : 'create'));
+const editorBusy = computed(
+  () => concertsLoading.value || savingConcert.value || releasingConcert.value || deletingConcert.value
+);
+const hasDirtyConcertForm = computed(() => {
+  const baseline = editorBaseline.value;
+  return (
+    editorForm.title.trim() !== baseline.title ||
+    editorForm.description.trim() !== baseline.description ||
+    editorForm.announcement.trim() !== baseline.announcement ||
+    editorForm.applicationDeadline !== baseline.applicationDeadline ||
+    editorForm.status !== baseline.status ||
+    Boolean(selectedAttachmentFile.value) ||
+    removeAttachment.value
+  );
+});
+
+function formatDate(value) {
+  return formatDateTimeInBeijing(value, locale.value);
+}
+
+function setError(err, fallbackKey = 'admin.errorRequest') {
+  const details = err?.response?.data?.details;
+  const detailText = Array.isArray(details) && details.length > 0
+    ? details[0]?.message
+    : '';
+  showError(detailText || err, t(fallbackKey));
+}
 
 function toStorageDateTime(value) {
   if (!value) {
@@ -166,59 +264,37 @@ function toStorageDateTime(value) {
 }
 
 function toInputDateTime(value) {
-  if (!value) {
-    return '';
+  return utcIsoToBeijingInput(value);
+}
+
+function normalizeConcertForm(form) {
+  form.title = String(form.title || '').trim();
+  form.description = String(form.description || '').trim();
+  form.announcement = String(form.announcement || '').trim();
+}
+
+function snapshotConcertFormFromItem(item) {
+  return {
+    title: String(item?.title || '').trim(),
+    description: String(item?.description || '').trim(),
+    announcement: String(item?.announcement || '').trim(),
+    applicationDeadline: toInputDateTime(item?.applicationDeadline),
+    status: editableConcertStatuses.has(item?.status) ? item.status : 'draft'
+  };
+}
+
+function validateConcertForm(form) {
+  normalizeConcertForm(form);
+  if (form.title.length < 2) {
+    showError(t('admin.publishTitleInvalid'));
+    return false;
   }
-  const raw = String(value);
-  const direct = raw.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
-  if (direct) {
-    return direct[1];
-  }
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  const pad = (num) => String(num).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return true;
 }
 
-function setMessage(text) {
-  showSuccess(text);
-}
-
-function setError(err) {
-  showError(err, t('admin.errorRequest'));
-}
-
-function applySelectedConcert(concert) {
-  if (!concert) {
-    editForm.title = '';
-    editForm.description = '';
-    editForm.announcement = '';
-    editForm.applicationDeadline = '';
-    editForm.status = 'draft';
-    return;
-  }
-  editForm.title = concert.title || '';
-  editForm.description = concert.description || '';
-  editForm.announcement = concert.announcement || '';
-  editForm.applicationDeadline = toInputDateTime(concert.applicationDeadline);
-  editForm.status = concert.status || 'draft';
-  editAttachmentFile.value = null;
-  removeAttachment.value = false;
-}
-
-function onCreateFileChange(event) {
-  createAttachmentFile.value = event.target.files?.[0] || null;
-}
-
-function onEditFileChange(event) {
-  editAttachmentFile.value = event.target.files?.[0] || null;
-}
-
-function buildFormData(form, attachmentFile, removeCurrentAttachment = false) {
+function buildConcertFormData(form, attachmentFile, removeCurrentAttachment = false) {
   const payload = new FormData();
-  payload.append('title', form.title);
+  payload.append('title', form.title || '');
   payload.append('description', form.description || '');
   payload.append('announcement', form.announcement || '');
   payload.append('applicationDeadline', toStorageDateTime(form.applicationDeadline));
@@ -232,106 +308,299 @@ function buildFormData(form, attachmentFile, removeCurrentAttachment = false) {
   return payload;
 }
 
-async function loadConcerts() {
-  const { data } = await api.get('/admin/concerts');
-  concerts.value = data.items || [];
-  if (!concerts.value.length) {
-    selectedConcertId.value = 0;
-    applySelectedConcert(null);
+function normalizeConcertItem(item) {
+  return {
+    ...item,
+    description: item?.description || '',
+    announcement: item?.announcement || '',
+    attachmentPath: item?.attachmentPath || null,
+    status: editableConcertStatuses.has(item?.status) ? item.status : 'draft'
+  };
+}
+
+function resetEditorState() {
+  const empty = createEmptyConcertForm();
+  Object.assign(editorForm, empty);
+  editorBaseline.value = { ...empty };
+  selectedAttachmentFile.value = null;
+  removeAttachment.value = false;
+  releaseMessage.value = '';
+  attachmentInputNonce.value += 1;
+}
+
+function syncEditorStateFromConcert(concert, { preserveReleaseMessage = false } = {}) {
+  if (!concert) {
+    resetEditorState();
     return;
   }
-  if (!concerts.value.find((item) => item.id === selectedConcertId.value)) {
-    selectedConcertId.value = concerts.value[0].id;
+
+  const snapshot = snapshotConcertFormFromItem(concert);
+  Object.assign(editorForm, snapshot);
+  editorBaseline.value = { ...snapshot };
+  selectedAttachmentFile.value = null;
+  removeAttachment.value = false;
+  if (!preserveReleaseMessage) {
+    releaseMessage.value = '';
   }
-  applySelectedConcert(selectedConcert.value);
+  attachmentInputNonce.value += 1;
+}
+
+function clearRegistrationState({ cancelRequests = true } = {}) {
+  if (cancelRequests) {
+    registrationsRequestToken += 1;
+  }
+  loadingRegistrations.value = false;
+  registrationsConcertId.value = 0;
+  registrations.value = [];
+  selectedRegistrationId.value = 0;
+}
+
+function beginCreateMode({ skipConfirm = false } = {}) {
+  if (!skipConfirm && hasDirtyConcertForm.value && !window.confirm(t('admin.confirmDiscardConcertChanges'))) {
+    return false;
+  }
+  selectedConcertId.value = 0;
+  resetEditorState();
+  clearRegistrationState();
+  return true;
+}
+
+async function refreshConcerts() {
+  const requestId = ++concertsRequestToken;
+  concertsLoading.value = true;
+  try {
+    const { data } = await api.get('/admin/concerts');
+    if (requestId !== concertsRequestToken) {
+      return;
+    }
+
+    const items = (data.items || []).map(normalizeConcertItem);
+    concerts.value = items;
+
+    if (selectedConcertId.value && !items.some((item) => item.id === selectedConcertId.value)) {
+      beginCreateMode({ skipConfirm: true });
+      return;
+    }
+
+    if (selectedConcert.value && !hasDirtyConcertForm.value) {
+      syncEditorStateFromConcert(selectedConcert.value, { preserveReleaseMessage: true });
+    }
+  } catch (err) {
+    setError(err, 'admin.concertsLoadFailed');
+  } finally {
+    if (requestId === concertsRequestToken) {
+      concertsLoading.value = false;
+    }
+  }
+}
+
+function upsertConcert(item) {
+  const normalized = normalizeConcertItem(item);
+  const index = concerts.value.findIndex((entry) => entry.id === normalized.id);
+  if (index === -1) {
+    concerts.value = [normalized, ...concerts.value];
+    return;
+  }
+  const nextItems = [...concerts.value];
+  nextItems[index] = {
+    ...nextItems[index],
+    ...normalized
+  };
+  concerts.value = nextItems;
 }
 
 function selectConcert(concertId) {
+  if (editorBusy.value || selectedConcertId.value === concertId) {
+    return;
+  }
+  if (hasDirtyConcertForm.value && !window.confirm(t('admin.confirmDiscardConcertChanges'))) {
+    return;
+  }
   selectedConcertId.value = concertId;
-  applySelectedConcert(selectedConcert.value);
+  syncEditorStateFromConcert(selectedConcert.value);
+  clearRegistrationState();
+  loadRegistrations({ force: true });
 }
 
-async function createConcert() {
-  if (!window.confirm(t('admin.confirmCreateConcert'))) {
+function selectRegistration(registrationId) {
+  selectedRegistrationId.value = registrationId;
+}
+
+function handleAttachmentFileChange(file) {
+  selectedAttachmentFile.value = file;
+  if (file) {
+    removeAttachment.value = false;
+  }
+}
+
+function updateEditorForm(nextForm) {
+  Object.assign(editorForm, nextForm);
+}
+
+async function loadRegistrations({ force = false, preserveExisting = false } = {}) {
+  const concertId = selectedConcertId.value;
+  if (!concertId) {
+    clearRegistrationState();
     return;
   }
+  if (!force && registrationsConcertId.value === concertId) {
+    return;
+  }
+
+  const requestId = ++registrationsRequestToken;
+  if (!preserveExisting || registrationsConcertId.value !== concertId) {
+    registrations.value = [];
+    selectedRegistrationId.value = 0;
+  }
+  loadingRegistrations.value = true;
+
   try {
-    const payload = buildFormData(createForm, createAttachmentFile.value, false);
-    const { data } = await api.post('/admin/concerts', payload);
-    setMessage(t('admin.concertCreated', { id: data.id }));
-    createForm.title = '';
-    createForm.description = '';
-    createForm.announcement = '';
-    createForm.applicationDeadline = '';
-    createForm.status = 'draft';
-    createAttachmentFile.value = null;
-    await loadConcerts();
-    selectedConcertId.value = data.id;
-    applySelectedConcert(selectedConcert.value);
+    const { data } = await api.get(`/admin/concerts/${concertId}/applications`);
+    if (requestId !== registrationsRequestToken || concertId !== selectedConcertId.value) {
+      return;
+    }
+
+    registrations.value = data.items || [];
+    registrationsConcertId.value = concertId;
+    if (!registrations.value.length) {
+      selectedRegistrationId.value = 0;
+      return;
+    }
+    if (!registrations.value.some((item) => item.id === selectedRegistrationId.value)) {
+      selectedRegistrationId.value = registrations.value[0].id;
+    }
   } catch (err) {
-    setError(err);
+    if (requestId !== registrationsRequestToken) {
+      return;
+    }
+    registrations.value = [];
+    selectedRegistrationId.value = 0;
+    registrationsConcertId.value = 0;
+    setError(err, 'admin.registrationLoadFailed');
+  } finally {
+    if (requestId === registrationsRequestToken) {
+      loadingRegistrations.value = false;
+    }
   }
 }
 
-async function saveConcert() {
-  if (!selectedConcert.value) {
+async function submitConcertForm() {
+  if (!validateConcertForm(editorForm)) {
     return;
   }
+
+  if (!selectedConcert.value) {
+    if (!window.confirm(t('admin.confirmCreateConcert'))) {
+      return;
+    }
+    savingConcert.value = true;
+    try {
+      const payload = buildConcertFormData(editorForm, selectedAttachmentFile.value, false);
+      const { data } = await api.post('/admin/concerts', payload);
+      upsertConcert(data);
+      showSuccess(t('admin.concertCreated', { id: data.id }));
+      beginCreateMode({ skipConfirm: true });
+    } catch (err) {
+      setError(err);
+    } finally {
+      savingConcert.value = false;
+    }
+    return;
+  }
+
   if (!window.confirm(t('admin.confirmUpdateConcert'))) {
     return;
   }
+  savingConcert.value = true;
   try {
-    const payload = buildFormData(editForm, editAttachmentFile.value, removeAttachment.value);
-    await api.patch(`/admin/concerts/${selectedConcert.value.id}`, payload);
-    setMessage(t('admin.concertUpdated'));
-    await loadConcerts();
+    const payload = buildConcertFormData(editorForm, selectedAttachmentFile.value, removeAttachment.value);
+    const { data } = await api.patch(`/admin/concerts/${selectedConcert.value.id}`, payload);
+    upsertConcert(data);
+    syncEditorStateFromConcert(normalizeConcertItem(data), { preserveReleaseMessage: true });
+    showSuccess(t('admin.concertUpdated'));
   } catch (err) {
     setError(err);
+  } finally {
+    savingConcert.value = false;
   }
 }
 
 async function releaseConcert() {
-  if (!selectedConcert.value) {
+  if (!selectedConcert.value || editorBusy.value) {
+    return;
+  }
+  if (hasDirtyConcertForm.value) {
+    showError(t('admin.concertUnsavedBeforeRelease'));
     return;
   }
   if (!window.confirm(t('admin.confirmReleaseConcert'))) {
     return;
   }
+  releasingConcert.value = true;
   try {
     const { data } = await api.post(`/admin/concerts/${selectedConcert.value.id}/release`, {
       message: releaseMessage.value || undefined
     });
-    setMessage(t('admin.concertReleased', { count: data.notification?.sent || 0 }));
-    await loadConcerts();
+    upsertConcert({ ...selectedConcert.value, status: 'open' });
+    syncEditorStateFromConcert({ ...selectedConcert.value, status: 'open' }, { preserveReleaseMessage: true });
+    showSuccess(t('admin.concertReleased', { count: data.notification?.sent || 0 }));
   } catch (err) {
     setError(err);
+  } finally {
+    releasingConcert.value = false;
   }
 }
 
 async function deleteConcert() {
-  if (!selectedConcert.value) {
+  if (!selectedConcert.value || editorBusy.value) {
     return;
   }
-  
   if (!window.confirm(t('admin.confirmDeleteConcert'))) {
     return;
   }
-  
+  deletingConcert.value = true;
   try {
-    await api.delete(`/admin/concerts/${selectedConcert.value.id}`);
-    setMessage(t('admin.concertDeleted'));
-    await loadConcerts();
+    const concertId = selectedConcert.value.id;
+    await api.delete(`/admin/concerts/${concertId}`);
+    concerts.value = concerts.value.filter((item) => item.id !== concertId);
+    showSuccess(t('admin.concertDeleted'));
+    beginCreateMode({ skipConfirm: true });
   } catch (err) {
     setError(err);
+  } finally {
+    deletingConcert.value = false;
+  }
+}
+
+async function downloadRegistrationsCsv() {
+  if (!selectedConcertId.value || downloadingRegistrationsCsv.value) {
+    return;
+  }
+  downloadingRegistrationsCsv.value = true;
+  try {
+    const response = await api.get(`/admin/concerts/${selectedConcertId.value}/applications/export`, {
+      responseType: 'blob'
+    });
+    const fileNameMatch = String(response.headers['content-disposition'] || '').match(/filename="?([^"]+)"?/i);
+    const fileName = fileNameMatch?.[1] || `linquan_concert_applications_${selectedConcertId.value}.csv`;
+    const blobUrl = window.URL.createObjectURL(response.data);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(blobUrl);
+    showSuccess(t('admin.registrationCsvExported'));
+  } catch (err) {
+    setError(err, 'admin.registrationCsvExportFailed');
+  } finally {
+    downloadingRegistrationsCsv.value = false;
   }
 }
 
 onMounted(async () => {
-  try {
-    await loadConcerts();
-  } catch (err) {
-    setError(err);
-  }
+  await refreshConcerts();
 });
 </script>
 
@@ -344,52 +613,117 @@ onMounted(async () => {
   margin-top: 1rem;
 }
 
-.form {
+.section-head {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
 }
 
-.field-half {
-  flex: 1;
-}
-
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
-.concert-list {
+.concert-list,
+.registration-list {
   list-style: none;
   margin: 0.7rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  max-height: 26rem;
+  overflow: auto;
 }
 
-.concert-list li {
+.concert-list li,
+.registration-item {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel-soft);
-  padding: 0.62rem 0.7rem;
+  padding: 0.65rem 0.75rem;
   cursor: pointer;
+  color: var(--ink);
+  text-align: left;
 }
 
-.concert-list li.active {
+.concert-list li:hover,
+.registration-item:hover {
+  background: #242a31;
+}
+
+.concert-list li.active,
+.registration-item.active {
   border-color: var(--accent);
-  background: #23272c;
+  background: #262d35;
 }
 
-.concert-list h3 {
+.concert-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.concert-list h3,
+.registration-item h3 {
   margin: 0;
 }
 
-.concert-list p {
+.concert-list p,
+.registration-item p {
   margin: 0.35rem 0 0;
 }
 
+.multiline-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.action-row {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.inline-loading {
+  margin-top: 0.35rem;
+}
+
+@media (max-width: 860px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head,
+  .concert-item-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .action-row {
+    justify-content: flex-start;
+  }
+}
 </style>

@@ -7,6 +7,8 @@ import db from '../config/db.js';
 import { UPLOAD_ROOT } from '../config/env.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import HttpError from '../utils/httpError.js';
+import { serializePublishingTimestamps } from '../utils/dateTime.js';
+import { normalizeUploadedFileMeta, normalizeUploadedOriginalName } from '../utils/uploadFilename.js';
 
 const router = express.Router();
 
@@ -17,7 +19,7 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 function sanitizeFileBase(rawName) {
-  const originalName = String(rawName || '');
+  const originalName = normalizeUploadedOriginalName(rawName);
   const ext = path.extname(originalName);
   const base = path.basename(originalName, ext).trim();
   const normalized = (base || 'score')
@@ -31,7 +33,7 @@ function sanitizeFileBase(rawName) {
 }
 
 function resolveFileExtension(file) {
-  const extFromName = path.extname(String(file?.originalname || '')).toLowerCase();
+  const extFromName = path.extname(normalizeUploadedOriginalName(file?.originalname || '')).toLowerCase();
   if (extFromName) {
     return extFromName;
   }
@@ -49,6 +51,7 @@ const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
+      normalizeUploadedFileMeta(file);
       const safeBase = sanitizeFileBase(file.originalname);
       const ext = resolveFileExtension(file);
       cb(null, `${safeBase}-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
@@ -135,6 +138,72 @@ function toStoredUploadPath(filePath) {
   return `/uploads/${relativePath}`;
 }
 
+function resolveStoredUploadPath(rawPath) {
+  if (!rawPath) {
+    return null;
+  }
+  const normalized = String(rawPath).replaceAll('\\', '/');
+  if (!normalized.startsWith('/uploads/')) {
+    return null;
+  }
+  const relativePath = normalized.replace(/^\/+uploads\/+/, '');
+  const absolutePath = path.resolve(uploadRoot, relativePath);
+  const relativeToRoot = path.relative(uploadRoot, absolutePath);
+  if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+    return null;
+  }
+  return absolutePath;
+}
+
+function removeStoredUploadFile(rawPath) {
+  const filePath = resolveStoredUploadPath(rawPath);
+  if (!filePath) {
+    return;
+  }
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+
+function mapConcertApplication(item) {
+  if (!item) {
+    return null;
+  }
+  return serializePublishingTimestamps({
+    ...item,
+    scoreFilePath: toPublicPath(item.scoreFilePath)
+  });
+}
+
+function loadUserConcertApplications(concertId, userId) {
+  return db
+    .prepare(
+      `SELECT
+         id,
+         concert_id AS concertId,
+         user_id AS userId,
+         applicant_name AS applicantName,
+         applicant_student_number AS applicantStudentNumber,
+         COALESCE(piece_zh, piece_title) AS pieceZh,
+         COALESCE(piece_en, composer) AS pieceEn,
+         duration_min AS durationMin,
+         contact_qq AS contactQq,
+         COALESCE(piece_zh, piece_title) AS pieceTitle,
+         COALESCE(piece_en, composer) AS composer,
+         score_file_path AS scoreFilePath,
+         note,
+         status,
+         feedback,
+         created_at AS createdAt,
+         updated_at AS updatedAt
+       FROM concert_applications
+       WHERE concert_id = ? AND user_id = ?
+       ORDER BY updated_at DESC, id DESC`
+    )
+    .all(concertId, userId)
+    .map(mapConcertApplication);
+}
+
 router.get('/concerts', (req, res) => {
   const rows = db
     .prepare(
@@ -152,7 +221,13 @@ router.get('/concerts', (req, res) => {
        WHERE status != 'draft'
        ORDER BY created_at DESC, id DESC`
     )
-    .all();
+    .all()
+    .map((item) =>
+      serializePublishingTimestamps({
+        ...item,
+        attachmentPath: toPublicPath(item.attachmentPath)
+      })
+    );
 
   res.json({ items: rows });
 });
@@ -173,7 +248,7 @@ router.post(
       if (!concert) {
         throw new HttpError(404, 'Concert not found');
       }
-      if (!['open', 'audition'].includes(concert.status)) {
+      if (concert.status !== 'open') {
         throw new HttpError(400, 'Concert is not accepting applications');
       }
 
@@ -192,19 +267,18 @@ router.post(
       }
 
       const parsed = applicationSchema.parse({
-        applicantName: firstValue(
-          req.body.applicantName,
-          req.body.displayName
-        ),
-        applicantStudentNumber: firstValue(
-          req.body.applicantStudentNumber,
-          req.body.studentNumber
-        ),
+        applicantName: firstValue(req.body.applicantName, req.body.displayName),
+        applicantStudentNumber: firstValue(req.body.applicantStudentNumber, req.body.studentNumber),
         pieceZh: firstValue(req.body.pieceZh, req.body.pieceTitle),
         pieceEn: firstValue(req.body.pieceEn, req.body.composer),
         durationMin: firstValue(req.body.durationMin, req.body.duration, req.body.durationMinutes),
         contactQq: firstValue(req.body.contactQq, req.body.contact, req.body.qq)
       });
+      const applicationIdRaw = firstValue(req.body.applicationId, req.body.id);
+      const applicationId = applicationIdRaw === undefined ? null : Number(applicationIdRaw);
+      if (applicationIdRaw !== undefined && (!Number.isInteger(applicationId) || applicationId <= 0)) {
+        throw new HttpError(400, 'Invalid applicationId');
+      }
 
       const input = {
         applicantName:
@@ -231,15 +305,29 @@ router.post(
       if (input.applicantStudentNumber !== currentUserInfo.studentNumber) {
         throw new HttpError(400, 'Student number does not match current account');
       }
+
       const scorePath = req.file ? toStoredUploadPath(req.file.path) : null;
+      let targetApplicationId = null;
+      let previousScoreFilePath = null;
 
-      const existing = db
-        .prepare(
-          'SELECT id FROM concert_applications WHERE concert_id = ? AND user_id = ?'
-        )
-        .get(concertId, req.user.id);
+      if (applicationId) {
+        const existing = db
+          .prepare(
+            `SELECT
+               id,
+               user_id AS userId,
+               score_file_path AS scoreFilePath
+             FROM concert_applications
+             WHERE id = ? AND concert_id = ?`
+          )
+          .get(applicationId, concertId);
+        if (!existing) {
+          throw new HttpError(404, 'Concert application not found');
+        }
+        if (existing.userId !== req.user.id) {
+          throw new HttpError(403, 'You can only update your own applications');
+        }
 
-      if (existing) {
         db.prepare(
           `UPDATE concert_applications
            SET
@@ -269,8 +357,10 @@ router.post(
           scorePath,
           existing.id
         );
+        targetApplicationId = existing.id;
+        previousScoreFilePath = existing.scoreFilePath;
       } else {
-        db.prepare(
+        const insertResult = db.prepare(
           `INSERT INTO concert_applications
              (
                concert_id, user_id, applicant_name, applicant_student_number, piece_zh, piece_en,
@@ -290,6 +380,15 @@ router.post(
           input.pieceEn,
           scorePath
         );
+        targetApplicationId = Number(insertResult.lastInsertRowid);
+      }
+
+      if (scorePath && previousScoreFilePath && previousScoreFilePath !== scorePath) {
+        try {
+          removeStoredUploadFile(previousScoreFilePath);
+        } catch (fileErr) {
+          console.warn('Failed to delete replaced score file:', fileErr);
+        }
       }
 
       const application = db
@@ -313,14 +412,11 @@ router.post(
              created_at AS createdAt,
              updated_at AS updatedAt
            FROM concert_applications
-           WHERE concert_id = ? AND user_id = ?`
+           WHERE id = ?`
         )
-        .get(concertId, req.user.id);
+        .get(targetApplicationId);
 
-      res.status(201).json({
-        ...application,
-        scoreFilePath: toPublicPath(application?.scoreFilePath)
-      });
+      res.status(applicationId ? 200 : 201).json(mapConcertApplication(application));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: 'Invalid application payload', details: err.issues });
@@ -330,6 +426,20 @@ router.post(
   }
 );
 
+router.get('/concerts/:concertId/my-applications', authenticate, (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const items = loadUserConcertApplications(concertId, req.user.id);
+    return res.json({ items });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.get('/concerts/:concertId/my-application', authenticate, (req, res, next) => {
   try {
     const concertId = Number(req.params.concertId);
@@ -337,134 +447,62 @@ router.get('/concerts/:concertId/my-application', authenticate, (req, res, next)
       throw new HttpError(400, 'Invalid concertId');
     }
 
-    const row = db
-      .prepare(
-        `SELECT
-           id,
-           concert_id AS concertId,
-           user_id AS userId,
-           applicant_name AS applicantName,
-           applicant_student_number AS applicantStudentNumber,
-           COALESCE(piece_zh, piece_title) AS pieceZh,
-           COALESCE(piece_en, composer) AS pieceEn,
-           duration_min AS durationMin,
-           contact_qq AS contactQq,
-           COALESCE(piece_zh, piece_title) AS pieceTitle,
-           COALESCE(piece_en, composer) AS composer,
-           score_file_path AS scoreFilePath,
-           note,
-           status,
-           feedback,
-           created_at AS createdAt,
-           updated_at AS updatedAt
-         FROM concert_applications
-         WHERE concert_id = ? AND user_id = ?`
-      )
-      .get(concertId, req.user.id);
-
-    if (!row) {
-      return res.json({ item: null });
-    }
-
-    return res.json({
-      item: {
-        ...row,
-        scoreFilePath: toPublicPath(row.scoreFilePath)
-      }
-    });
+    const items = loadUserConcertApplications(concertId, req.user.id);
+    return res.json({ item: items[0] || null });
   } catch (err) {
     return next(err);
   }
 });
 
-router.get('/concerts/:concertId/auditions', authenticate, (req, res, next) => {
-  try {
-    const concertId = Number(req.params.concertId);
-    if (!Number.isInteger(concertId) || concertId <= 0) {
-      throw new HttpError(400, 'Invalid concertId');
-    }
+router.delete(
+  '/concerts/:concertId/applications/:applicationId',
+  authenticate,
+  requireRole('member', 'admin'),
+  (req, res, next) => {
+    try {
+      const concertId = Number(req.params.concertId);
+      const applicationId = Number(req.params.applicationId);
+      if (!Number.isInteger(concertId) || concertId <= 0) {
+        throw new HttpError(400, 'Invalid concertId');
+      }
+      if (!Number.isInteger(applicationId) || applicationId <= 0) {
+        throw new HttpError(400, 'Invalid applicationId');
+      }
 
-    const rows = db
-      .prepare(
-        `SELECT
-           aus.id,
-           aus.start_time AS startTime,
-           aus.end_time AS endTime,
-           aus.location,
-           ca.id AS applicationId,
-           COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
-            COALESCE(p.display_name, u.student_number) AS performerName
-         FROM audition_slots aus
-         LEFT JOIN concert_applications ca ON ca.id = aus.application_id
-         LEFT JOIN users u ON u.id = ca.user_id
-         LEFT JOIN profiles p ON p.user_id = u.id
-         WHERE aus.concert_id = ?
-         ORDER BY aus.start_time ASC`
-      )
-      .all(concertId);
-
-    res.json({ items: rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/concerts/:concertId/results', authenticate, (req, res, next) => {
-  try {
-    const concertId = Number(req.params.concertId);
-    if (!Number.isInteger(concertId) || concertId <= 0) {
-      throw new HttpError(400, 'Invalid concertId');
-    }
-
-    if (req.user.role === 'admin') {
-      const rows = db
+      const application = db
         .prepare(
           `SELECT
-             ca.id,
-             ca.user_id AS userId,
-             u.student_number AS studentNumber,
-             COALESCE(p.display_name, u.student_number) AS displayName,
-             ca.applicant_name AS applicantName,
-             ca.applicant_student_number AS applicantStudentNumber,
-             COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
-             COALESCE(ca.piece_en, ca.composer) AS pieceEn,
-             ca.duration_min AS durationMin,
-             ca.contact_qq AS contactQq,
-             COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
-             ca.status,
-             ca.feedback,
-             ca.updated_at AS updatedAt
-           FROM concert_applications ca
-           JOIN users u ON u.id = ca.user_id
-           LEFT JOIN profiles p ON p.user_id = u.id
-           WHERE ca.concert_id = ?
-           ORDER BY ca.updated_at DESC`
+             id,
+             user_id AS userId,
+             score_file_path AS scoreFilePath
+           FROM concert_applications
+           WHERE id = ? AND concert_id = ?`
         )
-        .all(concertId);
-      return res.json({ items: rows });
+        .get(applicationId, concertId);
+      if (!application) {
+        throw new HttpError(404, 'Concert application not found');
+      }
+      if (req.user.role !== 'admin' && application.userId !== req.user.id) {
+        throw new HttpError(403, 'You can only delete your own applications');
+      }
+
+      db.prepare('DELETE FROM concert_applications WHERE id = ?').run(applicationId);
+
+      try {
+        removeStoredUploadFile(application.scoreFilePath);
+      } catch (fileErr) {
+        console.warn('Failed to delete application score file:', fileErr);
+      }
+
+      return res.json({
+        message: 'Concert application deleted',
+        concertId,
+        applicationId
+      });
+    } catch (err) {
+      return next(err);
     }
-
-    const row = db
-      .prepare(
-        `SELECT
-           id,
-           COALESCE(piece_zh, piece_title) AS pieceZh,
-           COALESCE(piece_en, composer) AS pieceEn,
-           duration_min AS durationMin,
-           contact_qq AS contactQq,
-           COALESCE(piece_zh, piece_title) AS pieceTitle,
-           status,
-           feedback,
-           updated_at AS updatedAt
-         FROM concert_applications
-         WHERE concert_id = ? AND user_id = ?`
-      )
-      .get(concertId, req.user.id);
-
-    return res.json({ item: row || null });
-  } catch (err) {
-    return next(err);
   }
-});
+);
 
 export default router;

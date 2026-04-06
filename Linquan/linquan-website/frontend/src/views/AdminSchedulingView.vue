@@ -37,11 +37,14 @@
         }}
       </p>
       <p class="subtle" v-else>{{ t('admin.noCurrentSemester') }}</p>
+      <p class="subtle" v-if="currentSemester && currentSemester.id !== activeSemesterId && activeSemesterName">
+        {{ t('admin.activeSemesterHint', { name: activeSemesterName }) }}
+      </p>
       <p class="subtle" v-if="draftReady">{{ t('admin.draftScheduleReady') }}</p>
       <p class="subtle" v-else>{{ t('admin.noDraftSchedule') }}</p>
 
       <div class="row controls">
-        <button class="btn" @click="runSchedule">{{ t('admin.runScheduleWithWarning') }}</button>
+        <button class="btn" :disabled="!currentSemester" @click="runSchedule">{{ t('admin.runScheduleWithWarning') }}</button>
         <button class="btn secondary" :disabled="!currentSemester" @click="updateSchedule">
           {{ t('admin.updateSchedule') }}
         </button>
@@ -53,6 +56,20 @@
           {{ exportingPreferences ? t('admin.downloading') : t('admin.downloadPreferenceCsv') }}
         </button>
       </div>
+
+      <article class="guidance-panel" v-if="currentSemester && showPreferenceGuidance">
+        <h3>{{ t('admin.preferenceGuidanceTitle') }}</h3>
+        <p class="subtle">{{ preferenceGuidanceMessage }}</p>
+        <p class="subtle">
+          {{
+            t('admin.preferenceGuidanceCounts', {
+              submitted: preferenceSummary?.membersWithPreferences || 0,
+              total: preferenceSummary?.totalMembers || 0,
+              missing: preferenceSummary?.membersWithoutPreferences || 0
+            })
+          }}
+        </p>
+      </article>
 
       <article class="compliance-panel" v-if="compliance">
         <h3>{{ t('admin.requirementCheckTitle') }}</h3>
@@ -182,8 +199,38 @@
     </article>
 
     <article class="card panel">
-      <h2 class="section-title">{{ t('admin.createSemester') }}</h2>
-      <form class="form" @submit.prevent="createSemester">
+      <h2 class="section-title">{{ t('admin.semesterManagementTitle') }}</h2>
+      <p class="subtle">{{ t('admin.semesterManagementSubtitle') }}</p>
+
+      <div class="field">
+        <label>{{ t('admin.semesterSelect') }}</label>
+        <select
+          v-model.number="selectedSemesterId"
+          :disabled="loadingSemesters || semesterList.length === 0"
+          @change="onSemesterSelect(selectedSemesterId)"
+        >
+          <option :value="0">{{ t('common.choose') }}</option>
+          <option v-for="item in semesterList" :key="item.id" :value="item.id">
+            {{ item.name }}{{ item.isActive ? ` · ${t('admin.activeSemesterBadge')}` : '' }}
+          </option>
+        </select>
+      </div>
+
+      <div class="semester-list" v-if="semesterList.length">
+        <button
+          v-for="item in semesterList"
+          :key="item.id"
+          type="button"
+          class="semester-chip"
+          :class="{ active: item.id === selectedSemesterId }"
+          @click="onSemesterSelect(item.id)"
+        >
+          <span>{{ item.name }}</span>
+          <span class="subtle">{{ item.isActive ? t('admin.activeSemesterBadge') : item.startDate }}</span>
+        </button>
+      </div>
+
+      <form class="form section-space" @submit.prevent="submitSemester">
         <div class="field">
           <label>{{ t('admin.semesterName') }}</label>
           <input v-model.trim="semester.name" required />
@@ -202,7 +249,15 @@
           <input type="checkbox" v-model="semester.activate" />
           {{ t('admin.setActive') }}
         </label>
-        <button class="btn">{{ t('admin.createSemesterButton') }}</button>
+        <div class="row">
+          <button class="btn" :disabled="savingSemester">{{ semesterSubmitLabel }}</button>
+          <button class="btn secondary" type="button" :disabled="savingSemester" @click="resetSemesterForm">
+            {{ t('admin.resetSemesterForm') }}
+          </button>
+          <button class="btn warn" type="button" :disabled="!selectedSemesterId || deletingSemester" @click="deleteSemester">
+            {{ deletingSemester ? t('common.loading') : t('admin.deleteSemester') }}
+          </button>
+        </div>
       </form>
 
       <article class="unsatisfied-panel" v-if="draftReady">
@@ -354,44 +409,59 @@
   </section>
 
   <section class="calendar-board" ref="calendarBoardRef" v-if="draftReady && slots.length">
-    <article class="card day-card" v-for="day in dayOptions" :key="day.value">
-      <h3>{{ day.label }}</h3>
-      <table class="calendar-table">
-        <thead>
-          <tr>
-            <th>{{ t('schedule.headerTime') }}</th>
-            <th>{{ t('schedule.headerRoom1') }}</th>
-            <th>{{ t('schedule.headerRoom2') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="hour in hours" :key="`${day.value}-${hour}`">
-            <td class="time-col">{{ hour }}:00</td>
-            <td v-for="roomNo in [1, 2]" :key="roomNo">
-              <button
-                v-if="getSlot(day.value, hour, roomNo)"
-                class="slot-btn"
-                :class="slotClass(getSlot(day.value, hour, roomNo))"
-                :disabled="moving"
-                @click="onSlotClick(getSlot(day.value, hour, roomNo))"
-              >
-                <span class="count">
-                  {{ t('schedule.selectedCount', { count: getSlot(day.value, hour, roomNo).selectedCount }) }}
-                </span>
-                <span class="name">
-                  {{ getAssignment(getSlot(day.value, hour, roomNo).id)?.displayName || t('admin.unassigned') }}
-                </span>
-                <span class="hint">
-                  {{
-                    getAssignment(getSlot(day.value, hour, roomNo).id)?.studentNumber
-                      || t('admin.slotEditorClickToArrange')
-                  }}
-                </span>
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <article class="card arrange-card">
+      <div class="arrange-head">
+        <div>
+          <h3>{{ t('admin.slotEditorTitle') }}</h3>
+          <p class="subtle">{{ t('admin.slotEditorMoveHint') }}</p>
+        </div>
+      </div>
+      <div class="arrange-wrap">
+        <table class="arrange-table">
+          <thead>
+            <tr>
+              <th rowspan="2" class="time-col sticky-col">{{ t('schedule.headerTime') }}</th>
+              <th v-for="day in dayOptions" :key="`head-${day.value}`" colspan="2" class="day-header">
+                {{ day.label }}
+              </th>
+            </tr>
+            <tr>
+              <template v-for="day in dayOptions" :key="`rooms-${day.value}`">
+                <th class="room-header">{{ t('schedule.headerRoom1') }}</th>
+                <th class="room-header">{{ t('schedule.headerRoom2') }}</th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in calendarArrangeRows" :key="row.hour">
+              <td class="time-col sticky-col">{{ row.time }}</td>
+              <template v-for="day in row.days" :key="`day-${row.hour}-${day.dayValue}`">
+                <td v-for="cell in day.rooms" :key="cell.key" class="arrange-cell">
+                  <button
+                    v-if="cell.slot"
+                    class="slot-btn"
+                    :class="slotClass(cell.slot)"
+                    :disabled="moving"
+                    @click="onSlotClick(cell.slot)"
+                  >
+                    <span class="slot-top">
+                      <span class="count-badge" :title="t('schedule.selectedCount', { count: cell.slot.selectedCount })">
+                        {{ cell.slot.selectedCount }}
+                      </span>
+                      <span class="hint">
+                        {{ cell.assignment?.studentNumber || t('admin.slotEditorClickToArrange') }}
+                      </span>
+                    </span>
+                    <span class="name">
+                      {{ cell.assignment?.displayName || t('admin.unassigned') }}
+                    </span>
+                  </button>
+                </td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </article>
   </section>
 </template>
@@ -412,6 +482,14 @@ import { useToast } from '@/composables/toast';
 
 const { t } = useI18n();
 const { showSuccess, showError } = useToast();
+
+const semesterList = ref([]);
+const selectedSemesterId = ref(0);
+const editingSemesterId = ref(0);
+const activeSemesterId = ref(0);
+const loadingSemesters = ref(false);
+const savingSemester = ref(false);
+const deletingSemester = ref(false);
 
 const semester = reactive({
   name: '',
@@ -439,6 +517,7 @@ const exportingPreferences = ref(false);
 const slots = ref([]);
 const compliance = ref(null);
 const operations = ref([]);
+const preferenceSummary = ref(null);
 
 const historyStack = ref([]);
 const redoStack = ref([]);
@@ -555,19 +634,104 @@ const calendarPreviewRows = computed(() =>
   }))
 );
 
+const calendarArrangeRows = computed(() =>
+  hours.map((hour) => ({
+    hour,
+    time: `${String(hour).padStart(2, '0')}:00`,
+    days: dayOptions.value.map((day) => ({
+      dayValue: day.value,
+      rooms: [1, 2].map((roomNo) => {
+        const slot = getSlot(day.value, hour, roomNo);
+        const assignment = slot ? getAssignment(slot.id) : null;
+        return {
+          key: `${day.value}-${hour}-${roomNo}`,
+          roomNo,
+          slot,
+          assignment
+        };
+      })
+    }))
+  }))
+);
+
 const draftReady = computed(() => Boolean(draftBatch.value));
 const canUndo = computed(() => historyStack.value.length > 0);
 const canRedo = computed(() => redoStack.value.length > 0);
 const quickActionToggleVisible = computed(() =>
   Boolean(currentSemester.value) && draftReady.value && slots.value.length > 0 && inArrangeInterface.value
 );
+const activeSemesterName = computed(
+  () => semesterList.value.find((item) => item.id === activeSemesterId.value)?.name || ''
+);
+const semesterSubmitLabel = computed(() =>
+  editingSemesterId.value ? t('admin.updateSemesterButton') : t('admin.createSemesterButton')
+);
+const showPreferenceGuidance = computed(
+  () =>
+    Boolean(currentSemester.value)
+    && Boolean(preferenceSummary.value)
+    && (
+      !preferenceSummary.value.readyForGeneration
+      || Number(preferenceSummary.value.membersWithoutPreferences || 0) > 0
+    )
+);
+const preferenceGuidanceMessage = computed(() => {
+  if (!currentSemester.value || !preferenceSummary.value) {
+    return '';
+  }
+  if (!preferenceSummary.value.readyForGeneration) {
+    return t('admin.preferenceGuidanceMissing', { name: currentSemester.value.name });
+  }
+  if (Number(preferenceSummary.value.membersWithoutPreferences || 0) > 0) {
+    return t('admin.preferenceGuidancePartial', { name: currentSemester.value.name });
+  }
+  return t('admin.preferenceGuidanceReady', { name: currentSemester.value.name });
+});
+
+function clearSemesterForm() {
+  semester.name = '';
+  semester.startDate = '';
+  semester.endDate = '';
+  semester.activate = true;
+}
+
+function syncCurrentSemesterFromList() {
+  currentSemester.value = semesterList.value.find((item) => item.id === selectedSemesterId.value) || null;
+}
+
+function syncSemesterFormFromEditing() {
+  const selected = semesterList.value.find((item) => item.id === editingSemesterId.value) || null;
+  if (!selected) {
+    clearSemesterForm();
+    return;
+  }
+  semester.name = selected.name || '';
+  semester.startDate = selected.startDate || '';
+  semester.endDate = selected.endDate || '';
+  semester.activate = Boolean(selected.isActive);
+}
+
+function resetSchedulingInteractionState() {
+  selectedAssignmentId.value = 0;
+  activeSlotId.value = 0;
+  slotMemberId.value = 0;
+  slotMemberKeyword.value = '';
+  historyStack.value = [];
+  redoStack.value = [];
+}
 
 function setMessage(text) {
   showSuccess(text);
 }
 
 function setError(err) {
-  const text = typeof err === 'string' ? err : err?.response?.data?.message || t('admin.errorRequest');
+  const rawText = typeof err === 'string' ? err : err?.response?.data?.message || '';
+  let text = rawText || t('admin.errorRequest');
+  if (rawText === 'No member preferences found for this semester') {
+    text = t('admin.preferenceGuidanceMissing', {
+      name: currentSemester.value?.name || t('admin.currentSemesterFallback')
+    });
+  }
   showError(text);
 }
 
@@ -672,8 +836,57 @@ async function loadSlots(semesterId) {
   slots.value = data.items || [];
 }
 
-async function loadDraftSchedule() {
-  const { data } = await api.get('/admin/scheduling/proposed');
+async function loadSemesters({ keepCreateMode = false, preferredSemesterId = selectedSemesterId.value } = {}) {
+  loadingSemesters.value = true;
+  try {
+    const { data } = await api.get('/admin/semesters');
+    semesterList.value = data.items || [];
+    activeSemesterId.value = Number(data.currentSemesterId || 0);
+
+    if (!semesterList.value.length) {
+      selectedSemesterId.value = 0;
+      editingSemesterId.value = 0;
+      currentSemester.value = null;
+      clearSemesterForm();
+      return;
+    }
+
+    const resolvedSemesterId = semesterList.value.some((item) => item.id === preferredSemesterId)
+      ? Number(preferredSemesterId)
+      : Number(activeSemesterId.value || semesterList.value[0].id || 0);
+    selectedSemesterId.value = resolvedSemesterId;
+    syncCurrentSemesterFromList();
+
+    if (keepCreateMode) {
+      editingSemesterId.value = 0;
+      clearSemesterForm();
+    } else {
+      editingSemesterId.value = resolvedSemesterId;
+      syncSemesterFormFromEditing();
+    }
+  } finally {
+    loadingSemesters.value = false;
+  }
+}
+
+async function loadDraftSchedule(semesterId = selectedSemesterId.value) {
+  if (!semesterId) {
+    currentSemester.value = null;
+    draftBatch.value = null;
+    draftAssignments.value = [];
+    members.value = [];
+    unsatisfiedMembers.value = [];
+    compliance.value = null;
+    operations.value = [];
+    preferenceSummary.value = null;
+    await loadSlots(0);
+    return;
+  }
+
+  const { data } = await api.get('/admin/scheduling/proposed', {
+    params: { semesterId }
+  });
+  selectedSemesterId.value = data.semesterId || Number(semesterId);
   currentSemester.value = data.semester || null;
   draftBatch.value = data.batch || null;
   draftAssignments.value = data.assignments || [];
@@ -681,6 +894,7 @@ async function loadDraftSchedule() {
   unsatisfiedMembers.value = data.unsatisfiedMembers || [];
   compliance.value = data.compliance || null;
   operations.value = data.operations || [];
+  preferenceSummary.value = data.preferenceSummary || null;
 
   if (selectedAssignmentId.value) {
     const exists = draftAssignments.value.some((assignment) => assignment.id === selectedAssignmentId.value);
@@ -694,7 +908,7 @@ async function loadDraftSchedule() {
       slotMemberId.value = 0;
     }
   }
-  await loadSlots(data.semesterId);
+  await loadSlots(data.semesterId || semesterId);
   if (activeSlotId.value) {
     const exists = slots.value.some((slot) => slot.id === activeSlotId.value);
     if (!exists) {
@@ -703,15 +917,30 @@ async function loadDraftSchedule() {
   }
 }
 
-async function loadCurrentSemester() {
-  const { data } = await api.get('/admin/semesters/current');
-  currentSemester.value = data.item || null;
+function resetSemesterForm() {
+  editingSemesterId.value = 0;
+  clearSemesterForm();
 }
 
-async function createSemester() {
-  if (!window.confirm(t('admin.confirmCreateSemester'))) {
+async function onSemesterSelect(semesterId) {
+  selectedSemesterId.value = Number(semesterId) || 0;
+  editingSemesterId.value = selectedSemesterId.value;
+  syncCurrentSemesterFromList();
+  syncSemesterFormFromEditing();
+  resetSchedulingInteractionState();
+  try {
+    await loadDraftSchedule(selectedSemesterId.value);
+  } catch (err) {
+    setError(err);
+  }
+}
+
+async function submitSemester() {
+  const confirmKey = editingSemesterId.value ? 'admin.confirmUpdateSemester' : 'admin.confirmCreateSemester';
+  if (!window.confirm(t(confirmKey))) {
     return;
   }
+  savingSemester.value = true;
   try {
     const payload = {
       name: semester.name,
@@ -719,12 +948,51 @@ async function createSemester() {
       endDate: semester.endDate,
       activate: semester.activate
     };
-    const { data } = await api.post('/admin/semesters', payload);
-    setMessage(t('admin.semesterCreated', { id: data.id }));
-    await loadCurrentSemester();
-    await loadDraftSchedule();
+    if (editingSemesterId.value) {
+      await api.patch(`/admin/semesters/${editingSemesterId.value}`, payload);
+      setMessage(t('admin.semesterUpdated'));
+      await loadSemesters({
+        keepCreateMode: false,
+        preferredSemesterId: selectedSemesterId.value
+      });
+      await loadDraftSchedule(selectedSemesterId.value);
+    } else {
+      const { data } = await api.post('/admin/semesters', payload);
+      setMessage(t('admin.semesterCreated', { id: data.id }));
+      await loadSemesters({
+        keepCreateMode: false,
+        preferredSemesterId: data.id
+      });
+      await loadDraftSchedule(data.id);
+    }
   } catch (err) {
     setError(err);
+  } finally {
+    savingSemester.value = false;
+  }
+}
+
+async function deleteSemester() {
+  if (!selectedSemesterId.value) {
+    return;
+  }
+  if (!window.confirm(t('admin.confirmDeleteSemester'))) {
+    return;
+  }
+  deletingSemester.value = true;
+  try {
+    const { data } = await api.delete(`/admin/semesters/${selectedSemesterId.value}`);
+    setMessage(t('admin.semesterDeleted'));
+    resetSchedulingInteractionState();
+    await loadSemesters({
+      keepCreateMode: false,
+      preferredSemesterId: data?.replacementSemesterId || activeSemesterId.value
+    });
+    await loadDraftSchedule(selectedSemesterId.value);
+  } catch (err) {
+    setError(err);
+  } finally {
+    deletingSemester.value = false;
   }
 }
 
@@ -1044,8 +1312,8 @@ async function onSlotClick(slot) {
 
 onMounted(async () => {
   try {
-    await loadCurrentSemester();
-    await loadDraftSchedule();
+    await loadSemesters();
+    await loadDraftSchedule(selectedSemesterId.value);
     await nextTick();
     updateArrangeInterfaceState();
     window.addEventListener('scroll', updateArrangeInterfaceState, { passive: true });
@@ -1091,6 +1359,10 @@ watch(
   margin-top: 0.55rem;
 }
 
+.section-space {
+  margin-top: 0.85rem;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -1111,8 +1383,6 @@ watch(
 
 .calendar-board {
   margin-top: 1rem;
-  display: grid;
-  gap: 0.8rem;
 }
 
 .preview-panel {
@@ -1132,14 +1402,15 @@ watch(
   right: 1rem;
   top: 92px;
   bottom: auto;
-  width: 336px;
+  width: 320px;
   max-height: calc(100vh - 108px);
   overflow: auto;
   z-index: 35;
-  padding: 0.75rem 1rem;
+  padding: 0.7rem 0.9rem;
   border: 1px solid var(--line);
-  background: rgba(24, 27, 31, 0.95);
-  backdrop-filter: blur(4px);
+  background: rgba(15, 18, 21, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.32);
 }
 
 .quick-action-bar h3 {
@@ -1159,18 +1430,45 @@ watch(
   border-top: 1px solid var(--line);
 }
 
+.semester-list {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.semester-chip {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  padding: 0.7rem 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.semester-chip.active {
+  border-color: var(--accent);
+}
+
 .compliance-panel,
+.guidance-panel,
 .slot-editor,
 .operation-panel,
 .unsatisfied-panel {
   margin-top: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 0.65rem;
+  padding: 0.6rem 0.7rem;
   background: var(--panel-soft);
 }
 
 .compliance-panel h3,
+.guidance-panel h3,
 .slot-editor h3,
 .operation-panel h3,
 .unsatisfied-panel h3 {
@@ -1179,6 +1477,7 @@ watch(
 }
 
 .compliance-panel p,
+.guidance-panel p,
 .slot-editor p {
   margin: 0.35rem 0 0;
 }
@@ -1204,7 +1503,7 @@ watch(
   border-radius: 8px;
   background: var(--panel-soft);
   color: var(--ink);
-  padding: 0.45rem 0.55rem;
+  padding: 0.4rem 0.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1250,53 +1549,104 @@ watch(
   color: var(--muted);
 }
 
-.day-card {
-  padding: 0.75rem;
-}
-
-.day-card h3 {
-  margin: 0 0 0.6rem;
-}
-
-.calendar-table th,
-.calendar-table td {
-  border-bottom: 1px solid var(--line);
-  vertical-align: top;
-}
-
-.calendar-table th {
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-
 .time-col {
-  width: 84px;
+  width: 82px;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.83rem;
+}
+
+.arrange-card {
+  padding: 0.8rem 0.85rem 0.9rem;
+}
+
+.arrange-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin-bottom: 0.55rem;
+}
+
+.arrange-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.arrange-head .subtle {
+  margin: 0.25rem 0 0;
+}
+
+.arrange-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(7, 9, 12, 0.3);
+}
+
+.arrange-table {
+  min-width: 1320px;
+}
+
+.arrange-table th,
+.arrange-table td {
+  padding: 0.38rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.arrange-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #101318;
+}
+
+.sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #101318;
+}
+
+.arrange-table tbody .sticky-col {
+  background: #0f1215;
+}
+
+.day-header,
+.room-header {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.arrange-cell {
+  width: 146px;
 }
 
 .slot-btn {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-soft);
+  border-radius: 8px;
+  background: rgba(24, 28, 33, 0.88);
   color: var(--ink);
-  padding: 0.45rem 0.5rem;
+  min-height: 54px;
+  padding: 0.36rem 0.42rem;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.14rem;
   text-align: left;
   cursor: pointer;
 }
 
 .slot-btn.occupied {
-  border-color: #62666b;
+  border-color: #4b5159;
 }
 
 .slot-btn.source {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(240, 240, 240, 0.35);
+  box-shadow: 0 0 0 1px rgba(240, 240, 240, 0.2);
 }
 
 .slot-btn.target {
@@ -1304,7 +1654,7 @@ watch(
 }
 
 .slot-btn.active {
-  outline: 1px solid #999;
+  outline: 1px solid rgba(255, 255, 255, 0.44);
 }
 
 .slot-btn:disabled {
@@ -1312,19 +1662,45 @@ watch(
   opacity: 0.8;
 }
 
-.count {
-  font-size: 0.76rem;
-  color: var(--muted);
+.slot-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
 }
 
 .name {
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: 700;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hint {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.2rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-size: 0.69rem;
+  font-weight: 700;
 }
 
 .unsatisfied-panel table th,
@@ -1351,6 +1727,10 @@ watch(
   .member-chip {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .arrange-card {
+    padding: 0.7rem;
   }
 }
 </style>

@@ -79,7 +79,7 @@ router.get('/profiles', (req, res) => {
          p.wechat_account AS "wechatAccount"
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
-       WHERE u.role = 'member'
+       WHERE u.role = 'member' AND u.is_active = 1
        ORDER BY u.id ASC`
     )
     .all();
@@ -108,7 +108,7 @@ router.get('/profiles/me', authenticate, (req, res) => {
          p.phone
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
-       WHERE u.id = ?`
+       WHERE u.id = ? AND u.is_active = 1`
     )
     .get(req.user.id);
 
@@ -141,7 +141,7 @@ router.get('/profiles/:userId(\\d+)', authenticate, (req, res, next) => {
            p.updated_at AS "updatedAt"
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
-         WHERE u.id = ? AND u.role = 'member'`
+         WHERE u.id = ? AND u.role = 'member' AND u.is_active = 1`
       )
       .get(userId);
 
