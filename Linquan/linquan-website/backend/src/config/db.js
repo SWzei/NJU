@@ -173,18 +173,8 @@ function ensureSqliteConcertApplicationsMultiEntry(db) {
 }
 
 function dropLegacyReviewTablesSqlite(db) {
-  db.pragma('foreign_keys = OFF');
-  try {
-    db.exec(`
-      DROP TABLE IF EXISTS concert_review_assignments;
-      DROP TABLE IF EXISTS concert_review_batches;
-      DROP TABLE IF EXISTS concert_review_preferences;
-      DROP TABLE IF EXISTS concert_review_slots;
-      DROP TABLE IF EXISTS audition_slots;
-    `);
-  } finally {
-    db.pragma('foreign_keys = ON');
-  }
+  // Preserve historical review/audition data on existing installations.
+  // Current code no longer uses these tables, so they can remain in place.
 }
 
 function deriveAttachmentOriginalName(filePath) {
@@ -308,8 +298,6 @@ function ensureSqliteRuntimeSchema(db) {
   ensureColumn(db, 'concert_applications', 'piece_en', 'TEXT');
   ensureColumn(db, 'concert_applications', 'duration_min', 'INTEGER');
   ensureColumn(db, 'concert_applications', 'contact_qq', 'TEXT');
-  dropLegacyReviewTablesSqlite(db);
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -541,11 +529,6 @@ function ensurePostgresRuntimeSchema(db) {
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS contact_qq TEXT;
     ALTER TABLE concert_applications DROP CONSTRAINT IF EXISTS concert_applications_concert_id_user_id_key;
     DROP INDEX IF EXISTS idx_concert_applications_concert_user_unique;
-    DROP TABLE IF EXISTS concert_review_assignments;
-    DROP TABLE IF EXISTS concert_review_batches;
-    DROP TABLE IF EXISTS concert_review_preferences;
-    DROP TABLE IF EXISTS concert_review_slots;
-    DROP TABLE IF EXISTS audition_slots;
   `);
 
   db.exec(`
