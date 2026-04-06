@@ -591,15 +591,42 @@ Health check:
 
 ## 12. How to Update the Project
 
-### 12.1 Update Code From Git
+### 12.1 SSH + branch workflow in this monorepo
 
-1. `git pull`
-2. Reinstall dependencies in both packages:
-   - `cd backend && npm install`
-   - `cd ../frontend && npm install`
-3. Re-run checks:
-   - `cd ../frontend && npm run lint && npm run build`
-4. Restart backend/frontend dev servers
+Always work from repository root (`D:\Code\NJU`) and use SSH for GitHub:
+
+```powershell
+git remote set-url origin git@github.com:SWzei/NJU.git
+ssh -T git@github.com
+```
+
+Recommended daily workflow:
+
+```powershell
+cd D:\Code\NJU
+git status --short
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git switch -c your-feature-branch
+```
+
+Rules:
+
+- do not push risky changes directly to `main`
+- use feature branches and merge with a pull request
+- stage only the paths you intend to ship
+- do not use `git add .` from repo root for website work
+- keep secrets, databases, uploads, and generated files ignored at the correct scope
+
+Useful ignore checks:
+
+```powershell
+git check-ignore -v Linquan/database/example.db
+git check-ignore -v Linquan/linquan-website/database/linquan.db
+git check-ignore -v Linquan/linquan-website/backend/uploads/example.txt
+git check-ignore -v Linquan/linquan-website/.env
+```
 
 ### 12.2 Update Dependencies
 
@@ -644,31 +671,49 @@ Recommended sequence:
 3. update frontend API call (`frontend/src/services/api.js` or views)
 4. run `npm run lint` and `npm run build`
 
-### 12.5 Git Operations (Quick Reference)
+### 12.5 Add `linquan-website-v2` without touching `linquan-website`
 
-From repository root (`D:\\Code\\NJU`):
+This is the safe workflow when you need a second versioned directory in the monorepo.
 
-1. Check current changes:
-   - `git status`
-2. If Git lock error appears:
-   - `if (Test-Path .git\\index.lock) { Remove-Item .git\\index.lock -Force }`
-3. Stage website files:
-   - `git add Linquan/linquan-website`
-4. Create commit:
-   - `git commit -m "your message"`
-5. Push to GitHub:
-   - `git push origin main`
+1. Start from a feature branch created from `origin/main`.
+2. Copy `Linquan/linquan-website` to `Linquan/linquan-website-v2`.
+3. Exclude local-only files during the copy:
+   - `node_modules`
+   - `uploads`
+   - `dist`
+   - `coverage`
+   - `.env*`
+   - `*.db`, `*.sqlite*`
+   - logs
+   - `test-artifacts`
+4. Stage only the new directory plus any intentional docs or ignore updates.
+5. Push the feature branch and open a pull request into `main`.
 
-First-time remote setup (if needed):
+Example commands:
 
-1. `git remote add origin https://github.com/<your-user>/<your-repo>.git`
-2. `git push -u origin main`
+```powershell
+cd D:\Code\NJU
+git switch -c linquan-web-v2
+robocopy .\Linquan\linquan-website .\Linquan\linquan-website-v2 /E /XD node_modules dist coverage uploads backend\uploads test-artifacts .tmp-ui-e2e .git /XF .env .env.local *.db *.db-shm *.db-wal *.sqlite *.sqlite3 *.log
+if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
 
-For deployed Render service:
+git status --short
+git add -- Linquan/linquan-website-v2
+git commit -m "feat: add Linquan website v2 as separate directory"
+git push origin linquan-web-v2
+```
 
-1. `git push` updates deployment source branch.
-2. If Auto-Deploy is enabled, Render redeploys automatically.
-3. If Auto-Deploy is disabled, use Render manual deploy after push.
+Pull request URL pattern:
+
+```text
+https://github.com/SWzei/NJU/pull/new/linquan-web-v2
+```
+
+If `.git/index.lock` exists unexpectedly on Windows:
+
+```powershell
+if (Test-Path .git\index.lock) { Remove-Item .git\index.lock -Force }
+```
 
 ### 12.6 ECS Production Update Commands (Recommended)
 
