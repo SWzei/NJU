@@ -292,6 +292,7 @@ function ensureSqliteRuntimeSchema(db) {
   ensureColumn(db, 'profiles', 'hobbies', 'TEXT');
   ensureColumn(db, 'profiles', 'piano_interests', 'TEXT');
   ensureColumn(db, 'profiles', 'wechat_account', 'TEXT');
+  ensureColumn(db, 'profiles', 'campus', 'TEXT');
   ensureColumn(db, 'concert_applications', 'applicant_name', 'TEXT');
   ensureColumn(db, 'concert_applications', 'applicant_student_number', 'TEXT');
   ensureColumn(db, 'concert_applications', 'piece_zh', 'TEXT');
@@ -320,6 +321,14 @@ function ensureSqliteRuntimeSchema(db) {
       UNIQUE (term_id, day_of_week, hour)
     )
   `);
+  ensureColumn(db, 'class_matching_profiles', 'campus', 'TEXT');
+  ensureColumn(db, 'class_matching_profiles', 'budget_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'budget_max', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'fee_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'fee_max', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'student_skill_level', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'teacher_skill_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'teacher_skill_max', 'INTEGER');
   db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,14 +336,22 @@ function ensureSqliteRuntimeSchema(db) {
       user_id INTEGER NOT NULL,
       participant_type TEXT NOT NULL CHECK (participant_type IN ('student', 'teacher')),
       matching_mode TEXT NOT NULL DEFAULT 'ranking' CHECK (matching_mode IN ('direct', 'ranking')),
+      campus TEXT,
       skill_level TEXT,
       learning_goals TEXT,
       budget_expectation TEXT,
+      budget_min INTEGER,
+      budget_max INTEGER,
       teaching_experience TEXT,
       skill_specialization TEXT,
       fee_expectation TEXT,
+      fee_min INTEGER,
+      fee_max INTEGER,
       capacity INTEGER,
       direct_target_user_id INTEGER,
+      student_skill_level INTEGER,
+      teacher_skill_min INTEGER,
+      teacher_skill_max INTEGER,
       qualification_status TEXT NOT NULL DEFAULT 'pending' CHECK (qualification_status IN ('pending', 'approved', 'rejected')),
       qualification_feedback TEXT,
       reviewed_by INTEGER,
@@ -521,6 +538,7 @@ function ensurePostgresRuntimeSchema(db) {
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS hobbies TEXT;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS piano_interests TEXT;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS wechat_account TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS campus TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_name TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_student_number TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_zh TEXT;
@@ -549,20 +567,36 @@ function ensurePostgresRuntimeSchema(db) {
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (term_id, day_of_week, hour)
     );
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS campus TEXT;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS budget_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS budget_max INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS fee_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS fee_max INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS student_skill_level INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS teacher_skill_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS teacher_skill_max INTEGER;
     CREATE TABLE IF NOT EXISTS class_matching_profiles (
       id SERIAL PRIMARY KEY,
       term_id INTEGER NOT NULL REFERENCES class_matching_terms(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       participant_type TEXT NOT NULL CHECK (participant_type IN ('student', 'teacher')),
       matching_mode TEXT NOT NULL DEFAULT 'ranking' CHECK (matching_mode IN ('direct', 'ranking')),
+      campus TEXT,
       skill_level TEXT,
       learning_goals TEXT,
       budget_expectation TEXT,
+      budget_min INTEGER,
+      budget_max INTEGER,
       teaching_experience TEXT,
       skill_specialization TEXT,
       fee_expectation TEXT,
+      fee_min INTEGER,
+      fee_max INTEGER,
       capacity INTEGER,
       direct_target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      student_skill_level INTEGER,
+      teacher_skill_min INTEGER,
+      teacher_skill_max INTEGER,
       qualification_status TEXT NOT NULL DEFAULT 'pending' CHECK (qualification_status IN ('pending', 'approved', 'rejected')),
       qualification_feedback TEXT,
       reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,

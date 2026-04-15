@@ -59,6 +59,17 @@
         <input v-model.trim="form.phone" :placeholder="t('profile.phonePlaceholder')" />
       </div>
       <div class="field">
+        <label>{{ t('profile.campus') }}</label>
+        <select v-model="form.campus">
+          <option value="">{{ t('common.choose') }}</option>
+          <option value="仙林">{{ t('profile.campusXianlin') }}</option>
+          <option value="鼓楼">{{ t('profile.campusGulou') }}</option>
+          <option value="苏州">{{ t('profile.campusSuzhou') }}</option>
+          <option value="浦口">{{ t('profile.campusPukou') }}</option>
+          <option value="其它">{{ t('profile.campusOther') }}</option>
+        </select>
+      </div>
+      <div class="field">
         <label>{{ t('profile.hobbies') }}</label>
         <textarea v-model="form.hobbies" :placeholder="t('profile.hobbiesPlaceholder')" />
       </div>
@@ -91,7 +102,8 @@ const form = reactive({
   hobbies: '',
   pianoInterests: '',
   wechatAccount: '',
-  phone: ''
+  phone: '',
+  campus: ''
 });
 
 const saving = ref(false);
@@ -115,6 +127,7 @@ function setForm(data) {
   form.pianoInterests = data.pianoInterests || '';
   form.wechatAccount = data.wechatAccount || '';
   form.phone = data.phone || '';
+  form.campus = data.campus || '';
 }
 
 async function loadData() {

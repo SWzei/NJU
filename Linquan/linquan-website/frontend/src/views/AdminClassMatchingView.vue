@@ -151,6 +151,19 @@
             </span>
           </div>
           <p class="subtle multiline-text">{{ activeTeacherProfile.teachingExperience || t('adminClassMatching.noTeachingExperience') }}</p>
+          <div class="teacher-meta">
+            <p class="subtle">
+              {{ t('adminClassMatching.teacherCampus') }}: {{ activeTeacherProfile.campus || t('adminClassMatching.notProvided') }}
+            </p>
+            <p class="subtle">
+              {{ t('adminClassMatching.teacherFeeRange') }}:
+              {{ activeTeacherProfile.feeMin != null && activeTeacherProfile.feeMax != null ? `${activeTeacherProfile.feeMin} - ${activeTeacherProfile.feeMax}` : t('adminClassMatching.notProvided') }}
+            </p>
+            <p class="subtle">
+              {{ t('adminClassMatching.teacherSkillRange') }}:
+              {{ activeTeacherProfile.teacherSkillMin != null && activeTeacherProfile.teacherSkillMax != null ? `${activeTeacherProfile.teacherSkillMin} - ${activeTeacherProfile.teacherSkillMax}` : t('adminClassMatching.notProvided') }}
+            </p>
+          </div>
           <div class="row">
             <div class="field field-half">
               <label>{{ t('common.status') }}</label>

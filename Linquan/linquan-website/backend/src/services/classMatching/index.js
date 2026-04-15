@@ -53,16 +53,20 @@ export function getUserClassMatchingOverview({ termId, userId }) {
   const myMatches = currentMatches.matches.filter(
     (item) => item.studentUserId === userId || item.teacherUserId === userId
   );
+  const baseProfile = loadBaseProfile(userId);
+  const effectiveCampus = baseProfile?.campus || participantProfile?.campus || null;
 
   return {
     term,
-    baseProfile: loadBaseProfile(userId),
+    baseProfile,
     participantProfile: participantProfile
       ? {
           ...participantProfile,
           capacity: participantProfile.participantType === 'teacher' ? clampCapacity(participantProfile.capacity) : null
         }
       : null,
+    effectiveCampus,
+    needsCampusInput: !effectiveCampus,
     slots: loadTermSlots(termId, userId),
     availabilitySlotIds: loadAvailabilityIds(termId, userId),
     rankingTargetUserIds: loadRankingIds(termId, userId),
