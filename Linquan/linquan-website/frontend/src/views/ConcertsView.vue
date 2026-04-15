@@ -124,10 +124,45 @@
       </div>
     </article>
   </section>
+
+  <section v-if="selectedConcertId && (auditions.length > 0 || myApplication)" class="card panel section-space">
+    <h2 class="section-title">{{ t('concerts.auditionInfoTitle') }}</h2>
+
+    <div v-if="latestAudition" class="audition-info">
+      <h3>{{ latestAudition.title }}</h3>
+      <p v-if="latestAudition.auditionTime" class="subtle">
+        <strong>{{ t('concerts.auditionTimeLabel') }}:</strong>
+        {{ formatDate(latestAudition.auditionTime) }}
+      </p>
+      <p v-if="latestAudition.announcement" class="subtle multiline-text">{{ latestAudition.announcement }}</p>
+      <p v-else-if="latestAudition.description" class="subtle multiline-text">{{ latestAudition.description }}</p>
+      <p v-if="latestAudition.attachmentPath" class="subtle">
+        <a :href="latestAudition.attachmentPath" target="_blank" rel="noopener">
+          {{ t('concerts.downloadAttachment') }}
+        </a>
+      </p>
+    </div>
+    <p v-else class="subtle">{{ t('concerts.noAuditionInfo') }}</p>
+
+    <div v-if="myApplication?.auditionStatus" class="audition-result">
+      <p class="subtle">
+        <strong>{{ t('concerts.auditionResultLabel') }}:</strong>
+        <span :class="auditionStatusClass">
+          {{ auditionStatusText }}
+        </span>
+      </p>
+      <p v-if="myApplication.auditionFeedback" class="subtle multiline-text">
+        <strong>
+          {{ myApplication.auditionStatus === 'failed' ? t('concerts.auditionReasonLabel') : t('concerts.auditionFeedbackLabel') }}:
+        </strong>
+        {{ myApplication.auditionFeedback }}
+      </p>
+    </div>
+  </section>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
@@ -139,10 +174,24 @@ const selectedConcertId = ref(0);
 const applicationForms = ref([]);
 const submitting = ref(false);
 const removingItemIndex = ref(-1);
+const auditions = ref([]);
+const myApplication = ref(null);
 
 const { t, locale } = useI18n();
 const { showSuccess, showError } = useToast();
 const auth = useAuthStore();
+
+const latestAudition = computed(() => auditions.value[0] || null);
+const auditionStatusText = computed(() => {
+  const status = myApplication.value?.auditionStatus;
+  if (status === 'passed') return t('concerts.auditionResultPassed');
+  if (status === 'failed') return t('concerts.auditionResultFailed');
+  return t('concerts.auditionResultPending');
+});
+const auditionStatusClass = computed(() => {
+  const status = myApplication.value?.auditionStatus;
+  return `audition-status-${status || 'pending'}`;
+});
 
 const defaultApplicantName = ref('');
 const defaultStudentNumber = ref('');
@@ -266,15 +315,33 @@ async function loadIdentity() {
 async function loadConcertDetails() {
   if (!auth.isAuthenticated) {
     resetApplicationForms();
+    myApplication.value = null;
     return;
   }
   if (!selectedConcertId.value) {
     resetApplicationForms();
+    myApplication.value = null;
     return;
   }
 
   const myApplicationsRes = await api.get(`/concerts/${selectedConcertId.value}/my-applications`);
-  resetApplicationForms(myApplicationsRes.data.items || []);
+  const items = myApplicationsRes.data.items || [];
+  resetApplicationForms(items);
+  myApplication.value = items[0] || null;
+}
+
+async function loadAuditions() {
+  if (!selectedConcertId.value) {
+    auditions.value = [];
+    return;
+  }
+  try {
+    const { data } = await api.get(`/concerts/${selectedConcertId.value}/auditions`);
+    auditions.value = data.items || [];
+  } catch (err) {
+    auditions.value = [];
+    showError(err, t('concerts.loadFailed'));
+  }
 }
 
 async function submitApplications() {
@@ -334,10 +401,11 @@ async function submitApplications() {
 
 watch(selectedConcertId, async () => {
   if (!auth.isAuthenticated) {
+    await loadAuditions();
     return;
   }
   try {
-    await loadConcertDetails();
+    await Promise.all([loadConcertDetails(), loadAuditions()]);
   } catch (err) {
     showError(err, t('concerts.loadDetailsFailed'));
   }
@@ -349,7 +417,9 @@ onMounted(async () => {
     await loadIdentity();
     await loadConcerts();
     if (auth.isAuthenticated) {
-      await loadConcertDetails();
+      await Promise.all([loadConcertDetails(), loadAuditions()]);
+    } else {
+      await loadAuditions();
     }
   } catch (err) {
     showError(err, t('concerts.loadFailed'));
@@ -458,5 +528,31 @@ onMounted(async () => {
 
 .guest-apply-box {
   margin-top: 0.9rem;
+}
+
+.audition-info {
+  margin-top: 0.6rem;
+}
+
+.audition-info h3 {
+  margin: 0 0 0.4rem;
+}
+
+.audition-result {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.audition-status-pending {
+  color: var(--muted);
+}
+
+.audition-status-passed {
+  color: #4caf50;
+}
+
+.audition-status-failed {
+  color: var(--warn);
 }
 </style>

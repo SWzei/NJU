@@ -138,6 +138,8 @@ function ensureSqliteConcertApplicationsMultiEntry(db) {
           note TEXT,
           status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'accepted', 'rejected', 'waitlist')),
           feedback TEXT,
+          audition_status TEXT CHECK (audition_status IN ('pending', 'passed', 'failed')),
+          audition_feedback TEXT,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
@@ -149,12 +151,12 @@ function ensureSqliteConcertApplicationsMultiEntry(db) {
         INSERT INTO concert_applications (
           id, concert_id, user_id, applicant_name, applicant_student_number,
           piece_zh, piece_en, duration_min, contact_qq, piece_title, composer,
-          score_file_path, note, status, feedback, created_at, updated_at
+          score_file_path, note, status, feedback, audition_status, audition_feedback, created_at, updated_at
         )
         SELECT
           id, concert_id, user_id, applicant_name, applicant_student_number,
           piece_zh, piece_en, duration_min, contact_qq, piece_title, composer,
-          score_file_path, note, status, feedback, created_at, updated_at
+          score_file_path, note, status, feedback, NULL, NULL, created_at, updated_at
         FROM concert_applications_old_multi
       `);
 
@@ -299,6 +301,26 @@ function ensureSqliteRuntimeSchema(db) {
   ensureColumn(db, 'concert_applications', 'piece_en', 'TEXT');
   ensureColumn(db, 'concert_applications', 'duration_min', 'INTEGER');
   ensureColumn(db, 'concert_applications', 'contact_qq', 'TEXT');
+  ensureColumn(db, 'concert_applications', 'audition_status', 'TEXT');
+  ensureColumn(db, 'concert_applications', 'audition_feedback', 'TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_auditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      announcement TEXT,
+      audition_time TEXT,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+      attachment_path TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC)');
   db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -545,6 +567,22 @@ function ensurePostgresRuntimeSchema(db) {
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_en TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS duration_min INTEGER;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS contact_qq TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS audition_status TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS audition_feedback TEXT;
+    CREATE TABLE IF NOT EXISTS concert_auditions (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      announcement TEXT,
+      audition_time TIMESTAMP,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+      attachment_path TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC);
     ALTER TABLE concert_applications DROP CONSTRAINT IF EXISTS concert_applications_concert_id_user_id_key;
     DROP INDEX IF EXISTS idx_concert_applications_concert_user_unique;
   `);

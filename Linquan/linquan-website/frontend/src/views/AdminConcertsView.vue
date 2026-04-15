@@ -63,6 +63,155 @@
     <article class="card panel">
       <div class="section-head">
         <div>
+          <h2 class="section-title">{{ t('admin.auditionTitle') }}</h2>
+          <p class="subtle">{{ t('admin.auditionSubtitle') }}</p>
+        </div>
+        <button
+          v-if="selectedAudition"
+          class="btn secondary"
+          type="button"
+          :disabled="editorBusy || savingAudition || releasingAudition || deletingAudition"
+          @click="beginCreateAuditionMode"
+        >
+          {{ t('admin.createNewConcertMode') }}
+        </button>
+      </div>
+
+      <p v-if="!selectedConcert" class="subtle">{{ t('admin.concertRequired') }}</p>
+      <template v-else>
+        <form class="form" @submit.prevent="submitAuditionForm">
+          <div class="field">
+            <label>{{ t('common.title') }}</label>
+            <input v-model.trim="auditionForm.title" :disabled="auditionEditorBusy" />
+          </div>
+          <div class="field">
+            <label>{{ t('admin.description') }}</label>
+            <textarea v-model="auditionForm.description" rows="3" :disabled="auditionEditorBusy" />
+          </div>
+          <div class="field">
+            <label>{{ t('admin.announcement') }}</label>
+            <textarea v-model="auditionForm.announcement" rows="3" :disabled="auditionEditorBusy" />
+          </div>
+          <div class="field">
+            <label>{{ t('admin.auditionTime') }}</label>
+            <input
+              type="datetime-local"
+              v-model="auditionForm.auditionTime"
+              :placeholder="t('admin.dateTimePlaceholder')"
+              :disabled="auditionEditorBusy"
+            />
+          </div>
+          <div class="field">
+            <label>{{ t('admin.auditionStatus') }}</label>
+            <select v-model="auditionForm.status" :disabled="auditionEditorBusy">
+              <option value="draft">{{ t('concertStatus.draft') }}</option>
+              <option value="open">{{ t('concertStatus.open') }}</option>
+              <option value="closed">{{ t('concertStatus.closed') }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>{{ t('admin.attachmentFile') }}</label>
+            <input
+              type="file"
+              :key="auditionAttachmentInputNonce"
+              @change="onAuditionFileChange"
+              :disabled="auditionEditorBusy"
+            />
+            <p v-if="selectedAudition && selectedAudition.attachmentPath && !removeAuditionAttachment && !selectedAuditionAttachmentFile" class="subtle">
+              <a :href="selectedAudition.attachmentPath" target="_blank" rel="noopener">
+                {{ t('admin.currentAttachment') }}
+              </a>
+              <label class="inline-check">
+                <input type="checkbox" v-model="removeAuditionAttachment" :disabled="auditionEditorBusy" />
+                {{ t('admin.removeAttachment') }}
+              </label>
+            </p>
+            <p v-else-if="selectedAuditionAttachmentFile" class="subtle">
+              {{ t('admin.selectedFileName', { name: selectedAuditionAttachmentFile.name }) }}
+            </p>
+          </div>
+          <div class="row action-row">
+            <button
+              class="btn"
+              type="submit"
+              :disabled="auditionEditorBusy || !auditionForm.title.trim()"
+            >
+              {{ savingAudition ? t('common.loading') : t('admin.saveAudition') }}
+            </button>
+            <button
+              v-if="selectedAudition"
+              class="btn secondary"
+              type="button"
+              :disabled="auditionEditorBusy || hasDirtyAuditionForm"
+              @click="releaseAudition"
+            >
+              {{ releasingAudition ? t('common.loading') : t('admin.releaseAudition') }}
+            </button>
+            <button
+              v-if="selectedAudition"
+              class="btn warn"
+              type="button"
+              :disabled="auditionEditorBusy"
+              @click="deleteAudition"
+            >
+              {{ deletingAudition ? t('common.loading') : t('admin.deleteAudition') }}
+            </button>
+          </div>
+        </form>
+
+        <div v-if="selectedAudition" class="field section-space">
+          <label>{{ t('admin.auditionReleaseMessage') }}</label>
+          <textarea v-model="auditionReleaseMessage" rows="2" :disabled="auditionEditorBusy || hasDirtyAuditionForm" />
+        </div>
+      </template>
+    </article>
+
+    <article class="card panel">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">{{ t('admin.auditionListTitle') }}</h2>
+          <p class="subtle">
+            {{ selectedConcert ? t('admin.currentConcertEditing', { title: selectedConcert.title }) : t('admin.concertRequired') }}
+          </p>
+        </div>
+        <button
+          class="btn secondary"
+          type="button"
+          :disabled="!selectedConcertId || loadingAuditions || editorBusy"
+          @click="loadAuditions({ force: true })"
+        >
+          {{ loadingAuditions ? t('common.loading') : t('admin.refreshConcerts') }}
+        </button>
+      </div>
+
+      <p v-if="!selectedConcert" class="subtle">{{ t('admin.concertRequired') }}</p>
+      <p v-else-if="loadingAuditions && auditions.length === 0" class="subtle">{{ t('common.loading') }}</p>
+      <p v-else-if="auditions.length === 0" class="subtle">{{ t('admin.noAuditions') }}</p>
+
+      <ul v-else class="concert-list">
+        <li
+          v-for="item in auditions"
+          :key="item.id"
+          :class="{ active: item.id === selectedAuditionId }"
+          @click="selectAudition(item.id)"
+        >
+          <div class="concert-item-head">
+            <h3>{{ item.title }}</h3>
+            <span class="status-pill">{{ t(`concertStatus.${item.status}`) }}</span>
+          </div>
+          <p class="subtle" v-if="item.auditionTime">
+            {{ t('admin.auditionTime') }}: {{ formatDate(item.auditionTime) }}
+          </p>
+          <p class="subtle multiline-text">{{ item.announcement || item.description || t('concerts.noDetails') }}</p>
+        </li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="grid-2 section-space">
+    <article class="card panel">
+      <div class="section-head">
+        <div>
           <h2 class="section-title">{{ t('admin.registrationListTitle') }}</h2>
           <p class="subtle">
             {{ selectedConcert ? t('admin.registrationCount', { count: registrations.length }) : t('admin.registrationRequiresConcert') }}
@@ -170,6 +319,33 @@
           <label>{{ t('common.feedback') }}</label>
           <textarea :value="selectedRegistration.feedback" rows="4" readonly />
         </div>
+
+        <div class="audition-result section-space">
+          <h3 class="section-title" style="font-size: 1.15rem; margin-bottom: 0.5rem">{{ t('admin.auditionResultTitle') }}</h3>
+          <div class="field">
+            <label>{{ t('admin.auditionStatus') }}</label>
+            <select v-model="auditionResultForm.auditionStatus" :disabled="savingAuditionResult">
+              <option value="pending">{{ t('admin.auditionStatusPending') }}</option>
+              <option value="passed">{{ t('admin.auditionStatusPassed') }}</option>
+              <option value="failed">{{ t('admin.auditionStatusFailed') }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>{{ t('admin.auditionFeedback') }}</label>
+            <textarea v-model="auditionResultForm.auditionFeedback" rows="3" :disabled="savingAuditionResult" />
+            <p v-if="auditionResultInvalid" class="subtle" style="color: var(--warn)">
+              {{ t('admin.auditionFeedbackRequired') }}
+            </p>
+          </div>
+          <button
+            class="btn"
+            type="button"
+            :disabled="savingAuditionResult || auditionResultInvalid"
+            @click="saveAuditionResult"
+          >
+            {{ savingAuditionResult ? t('common.loading') : t('admin.saveAuditionResult') }}
+          </button>
+        </div>
       </template>
     </article>
   </section>
@@ -241,6 +417,63 @@ const hasDirtyConcertForm = computed(() => {
     editorForm.status !== baseline.status ||
     Boolean(selectedAttachmentFile.value) ||
     removeAttachment.value
+  );
+});
+
+function createEmptyAuditionForm() {
+  return {
+    title: '',
+    description: '',
+    announcement: '',
+    auditionTime: '',
+    status: 'draft'
+  };
+}
+
+const auditionForm = reactive(createEmptyAuditionForm());
+const auditions = ref([]);
+const selectedAuditionId = ref(0);
+const selectedAuditionAttachmentFile = ref(null);
+const auditionAttachmentInputNonce = ref(0);
+const removeAuditionAttachment = ref(false);
+const auditionReleaseMessage = ref('');
+const loadingAuditions = ref(false);
+const auditionsConcertId = ref(0);
+const auditionEditorBaseline = ref(createEmptyAuditionForm());
+const savingAudition = ref(false);
+const releasingAudition = ref(false);
+const deletingAudition = ref(false);
+
+const auditionResultForm = reactive({
+  auditionStatus: 'pending',
+  auditionFeedback: ''
+});
+const savingAuditionResult = ref(false);
+
+let auditionsRequestToken = 0;
+
+const selectedAudition = computed(
+  () => auditions.value.find((item) => item.id === selectedAuditionId.value) || null
+);
+const auditionEditorBusy = computed(
+  () => savingAudition.value || releasingAudition.value || deletingAudition.value
+);
+const hasDirtyAuditionForm = computed(() => {
+  const baseline = auditionEditorBaseline.value;
+  return (
+    auditionForm.title.trim() !== baseline.title ||
+    auditionForm.description.trim() !== baseline.description ||
+    auditionForm.announcement.trim() !== baseline.announcement ||
+    auditionForm.auditionTime !== baseline.auditionTime ||
+    auditionForm.status !== baseline.status ||
+    Boolean(selectedAuditionAttachmentFile.value) ||
+    removeAuditionAttachment.value
+  );
+});
+const auditionResultInvalid = computed(() => {
+  return (
+    auditionResultForm.auditionStatus === 'failed' &&
+    !String(auditionResultForm.auditionFeedback || '').trim()
   );
 });
 
@@ -362,6 +595,7 @@ function beginCreateMode({ skipConfirm = false } = {}) {
   selectedConcertId.value = 0;
   resetEditorState();
   clearRegistrationState();
+  clearAuditionState();
   return true;
 }
 
@@ -419,11 +653,25 @@ function selectConcert(concertId) {
   selectedConcertId.value = concertId;
   syncEditorStateFromConcert(selectedConcert.value);
   clearRegistrationState();
+  clearAuditionState();
   loadRegistrations({ force: true });
+  loadAuditions({ force: true });
 }
 
 function selectRegistration(registrationId) {
   selectedRegistrationId.value = registrationId;
+  syncAuditionResultFormFromRegistration();
+}
+
+function syncAuditionResultFormFromRegistration() {
+  const reg = selectedRegistration.value;
+  if (!reg) {
+    auditionResultForm.auditionStatus = 'pending';
+    auditionResultForm.auditionFeedback = '';
+    return;
+  }
+  auditionResultForm.auditionStatus = reg.auditionStatus || 'pending';
+  auditionResultForm.auditionFeedback = reg.auditionFeedback || '';
 }
 
 function handleAttachmentFileChange(file) {
@@ -435,6 +683,298 @@ function handleAttachmentFileChange(file) {
 
 function updateEditorForm(nextForm) {
   Object.assign(editorForm, nextForm);
+}
+
+function onAuditionFileChange(event) {
+  const file = event.target.files?.[0] || null;
+  selectedAuditionAttachmentFile.value = file;
+  if (file) {
+    removeAuditionAttachment.value = false;
+  }
+}
+
+function toAuditionStorageDateTime(value) {
+  if (!value) {
+    return '';
+  }
+  return `${value}:00`;
+}
+
+function normalizeAuditionForm(form) {
+  form.title = String(form.title || '').trim();
+  form.description = String(form.description || '').trim();
+  form.announcement = String(form.announcement || '').trim();
+}
+
+function snapshotAuditionFormFromItem(item) {
+  return {
+    title: String(item?.title || '').trim(),
+    description: String(item?.description || '').trim(),
+    announcement: String(item?.announcement || '').trim(),
+    auditionTime: toInputDateTime(item?.auditionTime),
+    status: editableConcertStatuses.has(item?.status) ? item.status : 'draft'
+  };
+}
+
+function validateAuditionForm(form) {
+  normalizeAuditionForm(form);
+  if (form.title.length < 2) {
+    showError(t('admin.publishTitleInvalid'));
+    return false;
+  }
+  return true;
+}
+
+function buildAuditionFormData(form, attachmentFile, removeCurrentAttachment = false) {
+  const payload = new FormData();
+  payload.append('title', form.title || '');
+  payload.append('description', form.description || '');
+  payload.append('announcement', form.announcement || '');
+  payload.append('auditionTime', toAuditionStorageDateTime(form.auditionTime));
+  payload.append('status', form.status);
+  if (attachmentFile) {
+    payload.append('attachmentFile', attachmentFile);
+  }
+  if (removeCurrentAttachment) {
+    payload.append('removeAttachment', 'true');
+  }
+  return payload;
+}
+
+function normalizeAuditionItem(item) {
+  return {
+    ...item,
+    description: item?.description || '',
+    announcement: item?.announcement || '',
+    attachmentPath: item?.attachmentPath || null,
+    status: editableConcertStatuses.has(item?.status) ? item.status : 'draft'
+  };
+}
+
+function resetAuditionEditorState() {
+  const empty = createEmptyAuditionForm();
+  Object.assign(auditionForm, empty);
+  auditionEditorBaseline.value = { ...empty };
+  selectedAuditionId.value = 0;
+  selectedAuditionAttachmentFile.value = null;
+  removeAuditionAttachment.value = false;
+  auditionReleaseMessage.value = '';
+  auditionAttachmentInputNonce.value += 1;
+}
+
+function syncAuditionEditorStateFromAudition(audition, { preserveReleaseMessage = false } = {}) {
+  if (!audition) {
+    resetAuditionEditorState();
+    return;
+  }
+  const snapshot = snapshotAuditionFormFromItem(audition);
+  Object.assign(auditionForm, snapshot);
+  auditionEditorBaseline.value = { ...snapshot };
+  selectedAuditionAttachmentFile.value = null;
+  removeAuditionAttachment.value = false;
+  if (!preserveReleaseMessage) {
+    auditionReleaseMessage.value = '';
+  }
+  auditionAttachmentInputNonce.value += 1;
+}
+
+function clearAuditionState({ cancelRequests = true } = {}) {
+  if (cancelRequests) {
+    auditionsRequestToken += 1;
+  }
+  loadingAuditions.value = false;
+  auditionsConcertId.value = 0;
+  auditions.value = [];
+  resetAuditionEditorState();
+}
+
+function beginCreateAuditionMode() {
+  resetAuditionEditorState();
+}
+
+function selectAudition(auditionId) {
+  if (auditionEditorBusy.value || selectedAuditionId.value === auditionId) {
+    return;
+  }
+  if (hasDirtyAuditionForm.value && !window.confirm(t('admin.confirmDiscardConcertChanges'))) {
+    return;
+  }
+  selectedAuditionId.value = auditionId;
+  syncAuditionEditorStateFromAudition(selectedAudition.value);
+}
+
+async function loadAuditions({ force = false } = {}) {
+  const concertId = selectedConcertId.value;
+  if (!concertId) {
+    clearAuditionState();
+    return;
+  }
+  if (!force && auditionsConcertId.value === concertId) {
+    return;
+  }
+
+  const requestId = ++auditionsRequestToken;
+  auditions.value = [];
+  resetAuditionEditorState();
+  loadingAuditions.value = true;
+
+  try {
+    const { data } = await api.get(`/admin/concerts/${concertId}/auditions`);
+    if (requestId !== auditionsRequestToken || concertId !== selectedConcertId.value) {
+      return;
+    }
+
+    auditions.value = (data.items || []).map(normalizeAuditionItem);
+    auditionsConcertId.value = concertId;
+  } catch (err) {
+    if (requestId !== auditionsRequestToken) {
+      return;
+    }
+    auditions.value = [];
+    auditionsConcertId.value = 0;
+    setError(err, 'admin.errorRequest');
+  } finally {
+    if (requestId === auditionsRequestToken) {
+      loadingAuditions.value = false;
+    }
+  }
+}
+
+function upsertAudition(item) {
+  const normalized = normalizeAuditionItem(item);
+  const index = auditions.value.findIndex((entry) => entry.id === normalized.id);
+  if (index === -1) {
+    auditions.value = [normalized, ...auditions.value];
+    return;
+  }
+  const nextItems = [...auditions.value];
+  nextItems[index] = {
+    ...nextItems[index],
+    ...normalized
+  };
+  auditions.value = nextItems;
+}
+
+async function submitAuditionForm() {
+  if (!validateAuditionForm(auditionForm)) {
+    return;
+  }
+  if (!selectedConcert.value) {
+    showError(t('admin.concertRequired'));
+    return;
+  }
+
+  if (!selectedAudition.value) {
+    savingAudition.value = true;
+    try {
+      const payload = buildAuditionFormData(auditionForm, selectedAuditionAttachmentFile.value, false);
+      const { data } = await api.post(`/admin/concerts/${selectedConcert.value.id}/auditions`, payload);
+      upsertAudition(data);
+      showSuccess(t('admin.auditionCreated', { id: data.id }));
+      beginCreateAuditionMode();
+    } catch (err) {
+      setError(err);
+    } finally {
+      savingAudition.value = false;
+    }
+    return;
+  }
+
+  savingAudition.value = true;
+  try {
+    const payload = buildAuditionFormData(
+      auditionForm,
+      selectedAuditionAttachmentFile.value,
+      removeAuditionAttachment.value
+    );
+    const { data } = await api.patch(
+      `/admin/concerts/${selectedConcert.value.id}/auditions/${selectedAudition.value.id}`,
+      payload
+    );
+    upsertAudition(data);
+    syncAuditionEditorStateFromAudition(normalizeAuditionItem(data), { preserveReleaseMessage: true });
+    showSuccess(t('admin.auditionUpdated'));
+  } catch (err) {
+    setError(err);
+  } finally {
+    savingAudition.value = false;
+  }
+}
+
+async function releaseAudition() {
+  if (!selectedAudition.value || auditionEditorBusy.value) {
+    return;
+  }
+  if (hasDirtyAuditionForm.value) {
+    showError(t('admin.concertUnsavedBeforeRelease'));
+    return;
+  }
+  if (!window.confirm(t('admin.confirmReleaseAudition'))) {
+    return;
+  }
+  releasingAudition.value = true;
+  try {
+    const { data } = await api.post(
+      `/admin/concerts/${selectedConcert.value.id}/auditions/${selectedAudition.value.id}/release`,
+      {
+        message: auditionReleaseMessage.value || undefined
+      }
+    );
+    upsertAudition({ ...selectedAudition.value, status: 'open' });
+    syncAuditionEditorStateFromAudition({ ...selectedAudition.value, status: 'open' }, { preserveReleaseMessage: true });
+    showSuccess(t('admin.auditionReleased', { count: data.notification?.sent || 0 }));
+  } catch (err) {
+    setError(err);
+  } finally {
+    releasingAudition.value = false;
+  }
+}
+
+async function deleteAudition() {
+  if (!selectedAudition.value || auditionEditorBusy.value) {
+    return;
+  }
+  if (!window.confirm(t('admin.confirmDeleteConcert'))) {
+    return;
+  }
+  deletingAudition.value = true;
+  try {
+    const concertId = selectedConcert.value.id;
+    const auditionId = selectedAudition.value.id;
+    await api.delete(`/admin/concerts/${concertId}/auditions/${auditionId}`);
+    auditions.value = auditions.value.filter((item) => item.id !== auditionId);
+    showSuccess(t('admin.auditionDeleted'));
+    beginCreateAuditionMode();
+  } catch (err) {
+    setError(err);
+  } finally {
+    deletingAudition.value = false;
+  }
+}
+
+async function saveAuditionResult() {
+  if (!selectedConcert.value || !selectedRegistration.value) {
+    return;
+  }
+  savingAuditionResult.value = true;
+  try {
+    const { data } = await api.patch(
+      `/admin/concerts/${selectedConcert.value.id}/applications/${selectedRegistration.value.id}/audition`,
+      {
+        auditionStatus: auditionResultForm.auditionStatus,
+        auditionFeedback: auditionResultForm.auditionFeedback || undefined
+      }
+    );
+    const index = registrations.value.findIndex((r) => r.id === data.id);
+    if (index !== -1) {
+      registrations.value[index] = data;
+    }
+    showSuccess(t('admin.auditionResultSaved'));
+  } catch (err) {
+    setError(err);
+  } finally {
+    savingAuditionResult.value = false;
+  }
 }
 
 async function loadRegistrations({ force = false, preserveExisting = false } = {}) {
@@ -469,6 +1009,7 @@ async function loadRegistrations({ force = false, preserveExisting = false } = {
     if (!registrations.value.some((item) => item.id === selectedRegistrationId.value)) {
       selectedRegistrationId.value = registrations.value[0].id;
     }
+    syncAuditionResultFormFromRegistration();
   } catch (err) {
     if (requestId !== registrationsRequestToken) {
       return;
@@ -709,6 +1250,21 @@ onMounted(async () => {
 
 .inline-loading {
   margin-top: 0.35rem;
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.audition-result {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
 }
 
 @media (max-width: 860px) {

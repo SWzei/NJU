@@ -278,11 +278,30 @@ CREATE TABLE IF NOT EXISTS concert_applications (
   note TEXT,
   status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'accepted', 'rejected', 'waitlist')),
   feedback TEXT,
+  audition_status TEXT CHECK (audition_status IN ('pending', 'passed', 'failed')),
+  audition_feedback TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS concert_auditions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  concert_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  announcement TEXT,
+  audition_time TEXT,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+  attachment_path TEXT,
+  created_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS schedule_operation_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
