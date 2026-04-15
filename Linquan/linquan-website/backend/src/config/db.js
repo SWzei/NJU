@@ -322,6 +322,37 @@ function ensureSqliteRuntimeSchema(db) {
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC)');
   db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      rest_after_min INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_segments_concert ON concert_segments(concert_id, display_order)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_program_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      segment_id INTEGER NOT NULL,
+      application_id INTEGER NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      interval_before_min INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
+      FOREIGN KEY (segment_id) REFERENCES concert_segments(id) ON DELETE CASCADE,
+      FOREIGN KEY (application_id) REFERENCES concert_applications(id) ON DELETE CASCADE,
+      UNIQUE (concert_id, application_id)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_program_items_segment ON concert_program_items(segment_id, display_order)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_program_items_concert ON concert_program_items(concert_id)');
+  db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -585,6 +616,29 @@ function ensurePostgresRuntimeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC);
     ALTER TABLE concert_applications DROP CONSTRAINT IF EXISTS concert_applications_concert_id_user_id_key;
     DROP INDEX IF EXISTS idx_concert_applications_concert_user_unique;
+    CREATE TABLE IF NOT EXISTS concert_segments (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      rest_after_min INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_segments_concert ON concert_segments(concert_id, display_order);
+    CREATE TABLE IF NOT EXISTS concert_program_items (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      segment_id INTEGER NOT NULL REFERENCES concert_segments(id) ON DELETE CASCADE,
+      application_id INTEGER NOT NULL REFERENCES concert_applications(id) ON DELETE CASCADE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      interval_before_min INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (concert_id, application_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_program_items_segment ON concert_program_items(segment_id, display_order);
+    CREATE INDEX IF NOT EXISTS idx_concert_program_items_concert ON concert_program_items(concert_id);
   `);
 
   db.exec(`

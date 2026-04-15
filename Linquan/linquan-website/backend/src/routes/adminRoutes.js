@@ -4076,4 +4076,324 @@ router.patch('/admin/concerts/:concertId/applications/:applicationId/audition', 
   }
 });
 
+router.get('/admin/concerts/:concertId/program-arrangement', authenticate, requireRole('admin'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const segments = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           name,
+           display_order AS displayOrder,
+           rest_after_min AS restAfterMin,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_segments
+         WHERE concert_id = ?
+         ORDER BY display_order ASC, id ASC`
+      )
+      .all(concertId)
+      .map((s) => serializePublishingTimestamps(s));
+
+    const items = db
+      .prepare(
+        `SELECT
+           cpi.id,
+           cpi.concert_id AS concertId,
+           cpi.segment_id AS segmentId,
+           cpi.application_id AS applicationId,
+           cpi.display_order AS displayOrder,
+           cpi.interval_before_min AS intervalBeforeMin,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           cpi.created_at AS createdAt,
+           cpi.updated_at AS updatedAt
+         FROM concert_program_items cpi
+         JOIN concert_applications ca ON ca.id = cpi.application_id
+         WHERE cpi.concert_id = ?
+         ORDER BY cpi.segment_id ASC, cpi.display_order ASC, cpi.id ASC`
+      )
+      .all(concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const availablePrograms = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin
+         FROM concert_applications ca
+         WHERE ca.concert_id = ?
+           AND ca.audition_status = 'passed'
+           AND ca.id NOT IN (
+             SELECT application_id FROM concert_program_items WHERE concert_id = ?
+           )
+         ORDER BY ca.updated_at DESC, ca.id DESC`
+      )
+      .all(concertId, concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const totalProgramCount = items.length;
+    const totalProgramDurationMin = items.reduce((sum, item) => sum + (Number(item.durationMin) || 0), 0);
+    const totalIntervalMin = items.reduce((sum, item) => sum + (Number(item.intervalBeforeMin) || 0), 0);
+    const totalRestMin = segments.reduce((sum, seg) => sum + (Number(seg.restAfterMin) || 0), 0);
+    const totalActualDurationMin = totalProgramDurationMin + totalIntervalMin + totalRestMin;
+
+    const segmentsWithItems = segments.map((seg) => ({
+      ...seg,
+      items: items.filter((item) => item.segmentId === seg.id)
+    }));
+
+    res.json({
+      segments: segmentsWithItems,
+      availablePrograms,
+      stats: {
+        totalProgramCount,
+        totalProgramDurationMin,
+        totalActualDurationMin
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const programArrangementSchema = z.object({
+  segments: z.array(
+    z.object({
+      id: z.coerce.number().int().optional(),
+      name: z.string().min(1).max(120),
+      displayOrder: z.coerce.number().int().min(0).default(0),
+      restAfterMin: z.coerce.number().int().min(0).max(9999).default(0)
+    })
+  ),
+  items: z.array(
+    z.object({
+      id: z.coerce.number().int().optional(),
+      segmentId: z.coerce.number().int(),
+      applicationId: z.coerce.number().int().positive(),
+      displayOrder: z.coerce.number().int().min(0).default(0),
+      intervalBeforeMin: z.coerce.number().int().min(0).max(9999).default(0)
+    })
+  )
+});
+
+router.put('/admin/concerts/:concertId/program-arrangement', authenticate, requireRole('admin'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const parsed = programArrangementSchema.parse(req.body);
+
+    const seenApplicationIds = new Set();
+    for (const item of parsed.items) {
+      if (seenApplicationIds.has(item.applicationId)) {
+        throw new HttpError(400, `Duplicate applicationId ${item.applicationId} in items`);
+      }
+      seenApplicationIds.add(item.applicationId);
+    }
+
+    const segmentIdsFromRequest = new Set(
+      parsed.segments.map((s) => s.id).filter((id) => id != null)
+    );
+    for (const item of parsed.items) {
+      if (!segmentIdsFromRequest.has(item.segmentId)) {
+        throw new HttpError(400, `Invalid segmentId ${item.segmentId} in items`);
+      }
+    }
+
+    const passedApplications = db
+      .prepare(
+        `SELECT id FROM concert_applications
+         WHERE concert_id = ? AND audition_status = 'passed'`
+      )
+      .all(concertId);
+    const passedApplicationIds = new Set(passedApplications.map((a) => a.id));
+    for (const item of parsed.items) {
+      if (!passedApplicationIds.has(item.applicationId)) {
+        throw new HttpError(400, `Application ${item.applicationId} is not a passed program for this concert`);
+      }
+    }
+
+    const itemIdsFromRequest = new Set(
+      parsed.items.map((i) => i.id).filter(Boolean)
+    );
+
+    const saveTx = db.transaction(() => {
+      const existingSegments = db
+        .prepare('SELECT id FROM concert_segments WHERE concert_id = ?')
+        .all(concertId)
+        .map((s) => s.id);
+      const segmentsToDelete = existingSegments.filter((id) => !segmentIdsFromRequest.has(id));
+      if (segmentsToDelete.length > 0) {
+        const inClause = segmentsToDelete.map(() => '?').join(',');
+        db.prepare(`DELETE FROM concert_segments WHERE id IN (${inClause})`).run(...segmentsToDelete);
+      }
+
+      const segmentIdMap = new Map();
+      const insertSegment = db.prepare(
+        `INSERT INTO concert_segments (concert_id, name, display_order, rest_after_min)
+         VALUES (?, ?, ?, ?)`
+      );
+      const updateSegment = db.prepare(
+        `UPDATE concert_segments
+         SET name = ?, display_order = ?, rest_after_min = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND concert_id = ?`
+      );
+
+      for (const seg of parsed.segments) {
+        if (seg.id && Number(seg.id) > 0) {
+          updateSegment.run(seg.name, seg.displayOrder, seg.restAfterMin, seg.id, concertId);
+          segmentIdMap.set(seg.id, seg.id);
+        } else {
+          const result = insertSegment.run(concertId, seg.name, seg.displayOrder, seg.restAfterMin);
+          const newId = Number(result.lastInsertRowid);
+          segmentIdMap.set(seg.id, newId);
+        }
+      }
+
+      const existingItems = db
+        .prepare('SELECT id FROM concert_program_items WHERE concert_id = ?')
+        .all(concertId)
+        .map((i) => i.id);
+      const itemsToDelete = existingItems.filter((id) => !itemIdsFromRequest.has(id));
+      if (itemsToDelete.length > 0) {
+        const inClause = itemsToDelete.map(() => '?').join(',');
+        db.prepare(`DELETE FROM concert_program_items WHERE id IN (${inClause})`).run(...itemsToDelete);
+      }
+
+      const insertItem = db.prepare(
+        `INSERT INTO concert_program_items
+           (concert_id, segment_id, application_id, display_order, interval_before_min)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      const updateItem = db.prepare(
+        `UPDATE concert_program_items
+         SET segment_id = ?, display_order = ?, interval_before_min = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND concert_id = ?`
+      );
+
+      for (const item of parsed.items) {
+        const realSegmentId = segmentIdMap.get(item.segmentId);
+        if (!realSegmentId) {
+          throw new HttpError(400, `Segment ${item.segmentId} not found`);
+        }
+        if (item.id && Number(item.id) > 0) {
+          updateItem.run(realSegmentId, item.displayOrder, item.intervalBeforeMin, item.id, concertId);
+        } else {
+          insertItem.run(concertId, realSegmentId, item.applicationId, item.displayOrder, item.intervalBeforeMin);
+        }
+      }
+    });
+
+    saveTx();
+
+    const segments = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           name,
+           display_order AS displayOrder,
+           rest_after_min AS restAfterMin,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_segments
+         WHERE concert_id = ?
+         ORDER BY display_order ASC, id ASC`
+      )
+      .all(concertId)
+      .map((s) => serializePublishingTimestamps(s));
+
+    const items = db
+      .prepare(
+        `SELECT
+           cpi.id,
+           cpi.concert_id AS concertId,
+           cpi.segment_id AS segmentId,
+           cpi.application_id AS applicationId,
+           cpi.display_order AS displayOrder,
+           cpi.interval_before_min AS intervalBeforeMin,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           cpi.created_at AS createdAt,
+           cpi.updated_at AS updatedAt
+         FROM concert_program_items cpi
+         JOIN concert_applications ca ON ca.id = cpi.application_id
+         WHERE cpi.concert_id = ?
+         ORDER BY cpi.segment_id ASC, cpi.display_order ASC, cpi.id ASC`
+      )
+      .all(concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const availablePrograms = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin
+         FROM concert_applications ca
+         WHERE ca.concert_id = ?
+           AND ca.audition_status = 'passed'
+           AND ca.id NOT IN (
+             SELECT application_id FROM concert_program_items WHERE concert_id = ?
+           )
+         ORDER BY ca.updated_at DESC, ca.id DESC`
+      )
+      .all(concertId, concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const totalProgramCount = items.length;
+    const totalProgramDurationMin = items.reduce((sum, item) => sum + (Number(item.durationMin) || 0), 0);
+    const totalIntervalMin = items.reduce((sum, item) => sum + (Number(item.intervalBeforeMin) || 0), 0);
+    const totalRestMin = segments.reduce((sum, seg) => sum + (Number(seg.restAfterMin) || 0), 0);
+    const totalActualDurationMin = totalProgramDurationMin + totalIntervalMin + totalRestMin;
+
+    const segmentsWithItems = segments.map((seg) => ({
+      ...seg,
+      items: items.filter((item) => item.segmentId === seg.id)
+    }));
+
+    res.json({
+      segments: segmentsWithItems,
+      availablePrograms,
+      stats: {
+        totalProgramCount,
+        totalProgramDurationMin,
+        totalActualDurationMin
+      }
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid program arrangement payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
 export default router;

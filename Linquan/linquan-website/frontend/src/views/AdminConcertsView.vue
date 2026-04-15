@@ -349,6 +349,128 @@
       </template>
     </article>
   </section>
+
+  <section v-if="selectedConcertId" class="card panel section-space">
+    <div class="section-head">
+      <h2 class="section-title">{{ t('admin.programArrangementTitle') }}</h2>
+      <div class="row action-row">
+        <button
+          class="btn secondary"
+          type="button"
+          :disabled="loadingProgramArrangement"
+          @click="loadProgramArrangement"
+        >
+          {{ loadingProgramArrangement ? t('common.loading') : t('common.open') }}
+        </button>
+      </div>
+    </div>
+
+    <p v-if="loadingProgramArrangement && !programArrangement.segments.length && !programArrangement.availablePrograms.length" class="subtle">
+      {{ t('common.loading') }}
+    </p>
+
+    <div v-else class="grid-2 arrangement-grid">
+      <article class="card panel">
+        <h3 class="section-title" style="font-size: 1.1rem">{{ t('admin.availableProgramsTitle') }}</h3>
+        <p v-if="programArrangement.availablePrograms.length === 0" class="subtle">{{ t('admin.noAvailablePrograms') }}</p>
+        <div v-else class="program-pool">
+          <div v-for="program in programArrangement.availablePrograms" :key="program.id" class="program-card">
+            <div class="program-info">
+              <strong>{{ program.applicantName }}</strong>
+              <span class="subtle">{{ program.pieceZh }}</span>
+              <span class="subtle">{{ program.durationMin }} min</span>
+            </div>
+            <button
+              class="btn secondary"
+              type="button"
+              @click="addProgramToLastSegment(program.id)"
+            >
+              {{ t('admin.addToSegment') }}
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <article class="card panel">
+        <div class="section-head">
+          <h3 class="section-title" style="font-size: 1.1rem">{{ t('admin.segmentsTitle') }}</h3>
+          <div class="row action-row">
+            <button class="btn secondary" type="button" @click="addSegment">{{ t('admin.addSegment') }}</button>
+            <button
+              class="btn"
+              type="button"
+              :disabled="savingProgramArrangement"
+              @click="saveProgramArrangement"
+            >
+              {{ savingProgramArrangement ? t('common.loading') : t('admin.saveProgramArrangement') }}
+            </button>
+          </div>
+        </div>
+
+        <p v-if="programArrangement.segments.length === 0" class="subtle">{{ t('admin.noSegments') }}</p>
+
+        <div v-else class="segments-list">
+          <div v-for="segment in programArrangement.segments" :key="segment.id" class="segment-box">
+            <div class="segment-header">
+              <div class="field" style="flex: 1">
+                <label>{{ t('admin.segmentName') }}</label>
+                <input v-model="segment.name" @input="markSegmentNameEdited(segment.id)" />
+              </div>
+              <div class="field" style="width: 120px">
+                <label>{{ t('admin.restAfterMin') }}</label>
+                <input type="number" min="0" max="999" v-model.number="segment.restAfterMin" />
+              </div>
+              <button class="btn ghost" type="button" @click="removeSegment(segment.id)">
+                {{ t('admin.removeSegment') }}
+              </button>
+            </div>
+
+            <div v-if="segment.items.length === 0" class="subtle">{{ t('admin.noItemsInSegment') }}</div>
+            <div v-else class="segment-items">
+              <div v-for="(item, itemIndex) in segment.items" :key="item.id || item._localId" class="program-card">
+                <div class="field" style="width: 80px" v-if="itemIndex > 0">
+                  <label>{{ t('admin.intervalBeforeMin') }}</label>
+                  <input type="number" min="0" max="999" v-model.number="item.intervalBeforeMin" />
+                </div>
+                <div class="program-info" style="flex: 1">
+                  <strong>{{ item.applicantName }}</strong>
+                  <span class="subtle">{{ item.pieceZh }}</span>
+                  <span class="subtle">{{ item.durationMin }} min</span>
+                </div>
+                <div class="row" style="gap: 0.4rem">
+                  <button
+                    class="btn ghost"
+                    type="button"
+                    :disabled="itemIndex === 0"
+                    @click="moveItem(item.id || item._localId, -1)"
+                  >
+                    {{ t('admin.moveUp') }}
+                  </button>
+                  <button
+                    class="btn ghost"
+                    type="button"
+                    :disabled="itemIndex === segment.items.length - 1"
+                    @click="moveItem(item.id || item._localId, 1)"
+                  >
+                    {{ t('admin.moveDown') }}
+                  </button>
+                  <button class="btn ghost" type="button" @click="removeProgramItem(item.id || item._localId)">
+                    {{ t('admin.removeFromSegment') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrangement-stats">
+          <span>{{ t('admin.totalProgramCount') }}: {{ arrangementStats.totalProgramCount }}</span>
+          <span>{{ t('admin.totalProgramDuration') }}: {{ arrangementStats.totalProgramDurationMin }} min</span>
+          <span>{{ t('admin.totalActualDuration') }}: {{ arrangementStats.totalActualDurationMin }} min</span>
+        </div>
+      </article>
+    </div>
+  </section>
 </template>
 
 <script setup>
@@ -450,6 +572,17 @@ const auditionResultForm = reactive({
 });
 const savingAuditionResult = ref(false);
 
+const programArrangement = reactive({
+  segments: [],
+  availablePrograms: [],
+  stats: { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 }
+});
+const loadingProgramArrangement = ref(false);
+const savingProgramArrangement = ref(false);
+const segmentNameManuallyEdited = ref(new Set());
+let programArrangementRequestToken = 0;
+let programArrangementLocalId = 0;
+
 let auditionsRequestToken = 0;
 
 const selectedAudition = computed(
@@ -475,6 +608,20 @@ const auditionResultInvalid = computed(() => {
     auditionResultForm.auditionStatus === 'failed' &&
     !String(auditionResultForm.auditionFeedback || '').trim()
   );
+});
+
+const arrangementStats = computed(() => {
+  const items = programArrangement.segments.flatMap((seg) => seg.items || []);
+  const totalProgramCount = items.length;
+  const totalProgramDurationMin = items.reduce((sum, item) => sum + (Number(item.durationMin) || 0), 0);
+  const totalIntervalMin = items.reduce((sum, item) => sum + (Number(item.intervalBeforeMin) || 0), 0);
+  const totalRestMin = programArrangement.segments.reduce((sum, seg) => sum + (Number(seg.restAfterMin) || 0), 0);
+  const totalActualDurationMin = totalProgramDurationMin + totalIntervalMin + totalRestMin;
+  return {
+    totalProgramCount,
+    totalProgramDurationMin,
+    totalActualDurationMin
+  };
 });
 
 function formatDate(value) {
@@ -656,6 +803,7 @@ function selectConcert(concertId) {
   clearAuditionState();
   loadRegistrations({ force: true });
   loadAuditions({ force: true });
+  loadProgramArrangement();
 }
 
 function selectRegistration(registrationId) {
@@ -1140,6 +1288,243 @@ async function downloadRegistrationsCsv() {
   }
 }
 
+function generateSegmentName(count, index) {
+  if (count === 2) {
+    return index === 0 ? '上半场' : '下半场';
+  }
+  if (count === 3) {
+    return ['上场', '中场', '下场'][index] || `第${index + 1}场`;
+  }
+  return `第${index + 1}场`;
+}
+
+function generateSegmentNameEn(count, index) {
+  if (count === 2) {
+    return index === 0 ? 'First Half' : 'Second Half';
+  }
+  if (count === 3) {
+    return ['First Half', 'Intermission', 'Second Half'][index] || `Part ${index + 1}`;
+  }
+  return `Part ${index + 1}`;
+}
+
+function resolveDefaultSegmentName(count, index) {
+  return locale.value === 'en' ? generateSegmentNameEn(count, index) : generateSegmentName(count, index);
+}
+
+function recalcSegmentNames() {
+  const count = programArrangement.segments.length;
+  programArrangement.segments.forEach((seg, index) => {
+    if (!segmentNameManuallyEdited.value.has(seg.id)) {
+      seg.name = resolveDefaultSegmentName(count, index);
+    }
+  });
+}
+
+function markSegmentNameEdited(segmentId) {
+  segmentNameManuallyEdited.value.add(segmentId);
+}
+
+function resetProgramArrangement() {
+  programArrangement.segments = [];
+  programArrangement.availablePrograms = [];
+  programArrangement.stats = { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 };
+  segmentNameManuallyEdited.value.clear();
+}
+
+async function loadProgramArrangement() {
+  if (!selectedConcertId.value) {
+    resetProgramArrangement();
+    return;
+  }
+  const concertId = selectedConcertId.value;
+  const requestId = ++programArrangementRequestToken;
+  loadingProgramArrangement.value = true;
+  try {
+    const { data } = await api.get(`/admin/concerts/${concertId}/program-arrangement`);
+    if (requestId !== programArrangementRequestToken || concertId !== selectedConcertId.value) {
+      return;
+    }
+    programArrangement.segments = (data.segments || []).map((seg) => ({
+      ...seg,
+      items: (seg.items || []).map((item) => ({
+        ...item,
+        _localId: `local-item-${Date.now()}-${++programArrangementLocalId}`,
+        _originalProgram: {
+          id: item.applicationId,
+          applicantName: item.applicantName,
+          pieceZh: item.pieceZh,
+          pieceEn: item.pieceEn,
+          durationMin: item.durationMin
+        }
+      }))
+    }));
+    programArrangement.availablePrograms = data.availablePrograms || [];
+    programArrangement.stats = data.stats || { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 };
+    segmentNameManuallyEdited.value.clear();
+    programArrangement.segments.forEach((seg) => {
+      if (seg.name && seg.name !== resolveDefaultSegmentName(programArrangement.segments.length, seg.displayOrder || 0)) {
+        segmentNameManuallyEdited.value.add(seg.id);
+      }
+    });
+  } catch (err) {
+    if (requestId !== programArrangementRequestToken) {
+      return;
+    }
+    resetProgramArrangement();
+    setError(err, 'admin.programArrangementLoadFailed');
+  } finally {
+    if (requestId === programArrangementRequestToken) {
+      loadingProgramArrangement.value = false;
+    }
+  }
+}
+
+function addSegment() {
+  const newId = -(Date.now() + (++programArrangementLocalId));
+  const displayOrder = programArrangement.segments.length;
+  const newSegment = {
+    id: newId,
+    name: resolveDefaultSegmentName(displayOrder + 1, displayOrder),
+    displayOrder,
+    restAfterMin: 0,
+    items: []
+  };
+  programArrangement.segments.push(newSegment);
+  recalcSegmentNames();
+}
+
+function removeSegment(segmentId) {
+  const index = programArrangement.segments.findIndex((s) => s.id === segmentId);
+  if (index === -1) {
+    return;
+  }
+  const segment = programArrangement.segments[index];
+  const removedItems = segment.items || [];
+  programArrangement.segments.splice(index, 1);
+  removedItems.forEach((item) => {
+    const program = item._originalProgram;
+    if (program) {
+      programArrangement.availablePrograms.push(program);
+    }
+  });
+  programArrangement.segments.forEach((seg, idx) => {
+    seg.displayOrder = idx;
+  });
+  recalcSegmentNames();
+}
+
+function ensureAtLeastOneSegment() {
+  if (programArrangement.segments.length === 0) {
+    addSegment();
+  }
+}
+
+function addProgramToLastSegment(applicationId) {
+  ensureAtLeastOneSegment();
+  const programIndex = programArrangement.availablePrograms.findIndex((p) => p.id === applicationId);
+  if (programIndex === -1) {
+    return;
+  }
+  const program = programArrangement.availablePrograms[programIndex];
+  programArrangement.availablePrograms.splice(programIndex, 1);
+  const lastSegment = programArrangement.segments[programArrangement.segments.length - 1];
+  const newItem = {
+    _localId: `local-item-${Date.now()}-${++programArrangementLocalId}`,
+    id: null,
+    segmentId: lastSegment.id,
+    applicationId: program.id,
+    displayOrder: lastSegment.items.length,
+    intervalBeforeMin: 0,
+    applicantName: program.applicantName,
+    pieceZh: program.pieceZh,
+    pieceEn: program.pieceEn,
+    durationMin: program.durationMin,
+    _originalProgram: program
+  };
+  lastSegment.items.push(newItem);
+}
+
+function removeProgramItem(localId) {
+  for (const segment of programArrangement.segments) {
+    const index = segment.items.findIndex((item) => (item.id || item._localId) === localId);
+    if (index !== -1) {
+      const item = segment.items[index];
+      const program = item._originalProgram;
+      if (program) {
+        programArrangement.availablePrograms.push(program);
+      }
+      segment.items.splice(index, 1);
+      segment.items.forEach((it, idx) => {
+        it.displayOrder = idx;
+      });
+      break;
+    }
+  }
+}
+
+function moveItem(localId, direction) {
+  for (const segment of programArrangement.segments) {
+    const index = segment.items.findIndex((item) => (item.id || item._localId) === localId);
+    if (index === -1) {
+      continue;
+    }
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= segment.items.length) {
+      return;
+    }
+    const temp = segment.items[index];
+    segment.items[index] = segment.items[newIndex];
+    segment.items[newIndex] = temp;
+    segment.items.forEach((it, idx) => {
+      it.displayOrder = idx;
+    });
+    break;
+  }
+}
+
+function buildProgramArrangementPayload() {
+  const payloadSegments = programArrangement.segments.map((seg, index) => ({
+    id: seg.id,
+    name: seg.name,
+    displayOrder: index,
+    restAfterMin: Number(seg.restAfterMin) || 0
+  }));
+
+  const payloadItems = [];
+  for (const segment of programArrangement.segments) {
+    for (const item of segment.items) {
+      const isLocalItem = !item.id || Number(item.id) < 0;
+      payloadItems.push({
+        id: isLocalItem ? undefined : item.id,
+        segmentId: segment.id,
+        applicationId: item.applicationId,
+        displayOrder: item.displayOrder,
+        intervalBeforeMin: Number(item.intervalBeforeMin) || 0
+      });
+    }
+  }
+
+  return { segments: payloadSegments, items: payloadItems };
+}
+
+async function saveProgramArrangement() {
+  if (!selectedConcertId.value) {
+    return;
+  }
+  savingProgramArrangement.value = true;
+  try {
+    const payload = buildProgramArrangementPayload();
+    await api.put(`/admin/concerts/${selectedConcertId.value}/program-arrangement`, payload);
+    showSuccess(t('admin.programArrangementSaved'));
+    await loadProgramArrangement();
+  } catch (err) {
+    setError(err, 'admin.programArrangementSaveFailed');
+  } finally {
+    savingProgramArrangement.value = false;
+  }
+}
+
 onMounted(async () => {
   await refreshConcerts();
 });
@@ -1265,6 +1650,78 @@ onMounted(async () => {
   border-top: 1px solid var(--line);
   padding-top: 0.75rem;
   margin-top: 0.75rem;
+}
+
+.arrangement-grid {
+  margin-top: 0.75rem;
+}
+
+.program-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.program-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: var(--panel-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.program-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.program-info strong {
+  font-weight: 600;
+}
+
+.segments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.6rem;
+}
+
+.segment-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: var(--panel-soft);
+}
+
+.segment-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.segment-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.arrangement-stats {
+  margin-top: 0.85rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
 }
 
 @media (max-width: 860px) {
