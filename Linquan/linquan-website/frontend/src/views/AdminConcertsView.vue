@@ -60,110 +60,38 @@
   </section>
 
   <section class="grid-2 section-space">
-    <article class="card panel">
+    <AuditionEditorForm
+      v-if="selectedConcert"
+      :mode="selectedAudition ? 'edit' : 'create'"
+      :form="auditionForm"
+      :active-title="selectedAudition?.title || ''"
+      :current-attachment-path="selectedAudition?.attachmentPath || ''"
+      :selected-attachment-name="selectedAuditionAttachmentFile?.name || ''"
+      :remove-attachment="removeAuditionAttachment"
+      :release-message="auditionReleaseMessage"
+      :submitting="savingAudition"
+      :releasing="releasingAudition"
+      :deleting="deletingAudition"
+      :disabled="auditionEditorBusy"
+      :file-input-nonce="auditionAttachmentInputNonce"
+      :accept="concertAttachmentAccept"
+      @submit="submitAuditionForm"
+      @release="releaseAudition"
+      @delete="deleteAudition"
+      @reset-mode="beginCreateAuditionMode"
+      @file-change="onAuditionFileChange"
+      @update:form="updateAuditionForm"
+      @update:remove-attachment="removeAuditionAttachment = $event"
+      @update:release-message="auditionReleaseMessage = $event"
+    />
+    <article v-else class="card panel">
       <div class="section-head">
         <div>
           <h2 class="section-title">{{ t('admin.auditionTitle') }}</h2>
           <p class="subtle">{{ t('admin.auditionSubtitle') }}</p>
         </div>
-        <button
-          v-if="selectedAudition"
-          class="btn secondary"
-          type="button"
-          :disabled="editorBusy || savingAudition || releasingAudition || deletingAudition"
-          @click="beginCreateAuditionMode"
-        >
-          {{ t('admin.createNewConcertMode') }}
-        </button>
       </div>
-
-      <p v-if="!selectedConcert" class="subtle">{{ t('admin.concertRequired') }}</p>
-      <template v-else>
-        <form class="form" @submit.prevent="submitAuditionForm">
-          <div class="field">
-            <label>{{ t('common.title') }}</label>
-            <input v-model.trim="auditionForm.title" :disabled="auditionEditorBusy" />
-          </div>
-          <div class="field">
-            <label>{{ t('admin.description') }}</label>
-            <textarea v-model="auditionForm.description" rows="3" :disabled="auditionEditorBusy" />
-          </div>
-          <div class="field">
-            <label>{{ t('admin.announcement') }}</label>
-            <textarea v-model="auditionForm.announcement" rows="3" :disabled="auditionEditorBusy" />
-          </div>
-          <div class="field">
-            <label>{{ t('admin.auditionTime') }}</label>
-            <input
-              type="datetime-local"
-              v-model="auditionForm.auditionTime"
-              :placeholder="t('admin.dateTimePlaceholder')"
-              :disabled="auditionEditorBusy"
-            />
-          </div>
-          <div class="field">
-            <label>{{ t('admin.auditionStatus') }}</label>
-            <select v-model="auditionForm.status" :disabled="auditionEditorBusy">
-              <option value="draft">{{ t('concertStatus.draft') }}</option>
-              <option value="open">{{ t('concertStatus.open') }}</option>
-              <option value="closed">{{ t('concertStatus.closed') }}</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>{{ t('admin.attachmentFile') }}</label>
-            <input
-              type="file"
-              :key="auditionAttachmentInputNonce"
-              @change="onAuditionFileChange"
-              :disabled="auditionEditorBusy"
-            />
-            <p v-if="selectedAudition && selectedAudition.attachmentPath && !removeAuditionAttachment && !selectedAuditionAttachmentFile" class="subtle">
-              <a :href="selectedAudition.attachmentPath" target="_blank" rel="noopener">
-                {{ t('admin.currentAttachment') }}
-              </a>
-              <label class="inline-check">
-                <input type="checkbox" v-model="removeAuditionAttachment" :disabled="auditionEditorBusy" />
-                {{ t('admin.removeAttachment') }}
-              </label>
-            </p>
-            <p v-else-if="selectedAuditionAttachmentFile" class="subtle">
-              {{ t('admin.selectedFileName', { name: selectedAuditionAttachmentFile.name }) }}
-            </p>
-          </div>
-          <div class="row action-row">
-            <button
-              class="btn"
-              type="submit"
-              :disabled="auditionEditorBusy || !auditionForm.title.trim()"
-            >
-              {{ savingAudition ? t('common.loading') : t('admin.saveAudition') }}
-            </button>
-            <button
-              v-if="selectedAudition"
-              class="btn secondary"
-              type="button"
-              :disabled="auditionEditorBusy || hasDirtyAuditionForm"
-              @click="releaseAudition"
-            >
-              {{ releasingAudition ? t('common.loading') : t('admin.releaseAudition') }}
-            </button>
-            <button
-              v-if="selectedAudition"
-              class="btn warn"
-              type="button"
-              :disabled="auditionEditorBusy"
-              @click="deleteAudition"
-            >
-              {{ deletingAudition ? t('common.loading') : t('admin.deleteAudition') }}
-            </button>
-          </div>
-        </form>
-
-        <div v-if="selectedAudition" class="field section-space">
-          <label>{{ t('admin.auditionReleaseMessage') }}</label>
-          <textarea v-model="auditionReleaseMessage" rows="2" :disabled="auditionEditorBusy || hasDirtyAuditionForm" />
-        </div>
-      </template>
+      <p class="subtle">{{ t('admin.concertRequired') }}</p>
     </article>
 
     <article class="card panel">
@@ -260,7 +188,7 @@
       </div>
     </article>
 
-    <article class="card panel">
+    <article class="card panel registration-detail">
       <h2 class="section-title">{{ t('admin.registrationDetailTitle') }}</h2>
       <p v-if="!selectedConcert" class="subtle">{{ t('admin.registrationRequiresConcert') }}</p>
       <p v-else-if="loadingRegistrations && registrations.length === 0" class="subtle">{{ t('common.loading') }}</p>
@@ -380,13 +308,20 @@
               <span class="subtle">{{ program.pieceZh }}</span>
               <span class="subtle">{{ program.durationMin }} min</span>
             </div>
-            <button
-              class="btn secondary"
-              type="button"
-              @click="addProgramToLastSegment(program.id)"
-            >
-              {{ t('admin.addToSegment') }}
-            </button>
+            <div class="row" style="gap: 0.4rem; flex-wrap: nowrap">
+              <select v-model="programSegmentSelections[program.id]" class="segment-select">
+                <option v-for="seg in programArrangement.segments" :key="seg.id" :value="seg.id">
+                  {{ seg.name || `${t('admin.segmentName')} ${seg.displayOrder + 1}` }}
+                </option>
+              </select>
+              <button
+                class="btn secondary"
+                type="button"
+                @click="addProgramToSegment(program.id, programSegmentSelections[program.id])"
+              >
+                {{ t('admin.addToSegment') }}
+              </button>
+            </div>
           </div>
         </div>
       </article>
@@ -479,6 +414,7 @@ import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
 import ConcertEditorForm from '@/components/admin/ConcertEditorForm.vue';
+import AuditionEditorForm from '@/components/admin/AuditionEditorForm.vue';
 import { formatDateTimeInBeijing, utcIsoToBeijingInput } from '@/utils/dateTime';
 
 const { t, locale } = useI18n();
@@ -577,6 +513,7 @@ const programArrangement = reactive({
   availablePrograms: [],
   stats: { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 }
 });
+const programSegmentSelections = reactive({});
 const loadingProgramArrangement = ref(false);
 const savingProgramArrangement = ref(false);
 const segmentNameManuallyEdited = ref(new Set());
@@ -831,6 +768,10 @@ function handleAttachmentFileChange(file) {
 
 function updateEditorForm(nextForm) {
   Object.assign(editorForm, nextForm);
+}
+
+function updateAuditionForm(nextForm) {
+  Object.assign(auditionForm, nextForm);
 }
 
 function onAuditionFileChange(event) {
@@ -1330,6 +1271,7 @@ function resetProgramArrangement() {
   programArrangement.availablePrograms = [];
   programArrangement.stats = { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 };
   segmentNameManuallyEdited.value.clear();
+  Object.keys(programSegmentSelections).forEach((key) => delete programSegmentSelections[key]);
 }
 
 async function loadProgramArrangement() {
@@ -1361,6 +1303,15 @@ async function loadProgramArrangement() {
     }));
     programArrangement.availablePrograms = data.availablePrograms || [];
     programArrangement.stats = data.stats || { totalProgramCount: 0, totalProgramDurationMin: 0, totalActualDurationMin: 0 };
+    // Initialize default segment selection for each available program to the last segment
+    const lastSegmentId = programArrangement.segments.length > 0
+      ? programArrangement.segments[programArrangement.segments.length - 1].id
+      : null;
+    programArrangement.availablePrograms.forEach((program) => {
+      if (!(program.id in programSegmentSelections)) {
+        programSegmentSelections[program.id] = lastSegmentId;
+      }
+    });
     segmentNameManuallyEdited.value.clear();
     programArrangement.segments.forEach((seg) => {
       if (seg.name && seg.name !== resolveDefaultSegmentName(programArrangement.segments.length, seg.displayOrder || 0)) {
@@ -1420,21 +1371,24 @@ function ensureAtLeastOneSegment() {
   }
 }
 
-function addProgramToLastSegment(applicationId) {
+function addProgramToSegment(applicationId, segmentId) {
   ensureAtLeastOneSegment();
   const programIndex = programArrangement.availablePrograms.findIndex((p) => p.id === applicationId);
   if (programIndex === -1) {
     return;
   }
+  let targetSegment = programArrangement.segments.find((s) => s.id === segmentId);
+  if (!targetSegment) {
+    targetSegment = programArrangement.segments[programArrangement.segments.length - 1];
+  }
   const program = programArrangement.availablePrograms[programIndex];
   programArrangement.availablePrograms.splice(programIndex, 1);
-  const lastSegment = programArrangement.segments[programArrangement.segments.length - 1];
   const newItem = {
     _localId: `local-item-${Date.now()}-${++programArrangementLocalId}`,
     id: null,
-    segmentId: lastSegment.id,
+    segmentId: targetSegment.id,
     applicationId: program.id,
-    displayOrder: lastSegment.items.length,
+    displayOrder: targetSegment.items.length,
     intervalBeforeMin: 0,
     applicantName: program.applicantName,
     pieceZh: program.pieceZh,
@@ -1442,7 +1396,7 @@ function addProgramToLastSegment(applicationId) {
     durationMin: program.durationMin,
     _originalProgram: program
   };
-  lastSegment.items.push(newItem);
+  targetSegment.items.push(newItem);
 }
 
 function removeProgramItem(localId) {
@@ -1646,6 +1600,10 @@ onMounted(async () => {
   font-size: 0.85rem;
 }
 
+.registration-detail .field {
+  margin-bottom: 0.75rem;
+}
+
 .audition-result {
   border-top: 1px solid var(--line);
   padding-top: 0.75rem;
@@ -1712,6 +1670,16 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.segment-select {
+  min-width: 120px;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink);
+  font-size: 0.9rem;
 }
 
 .arrangement-stats {

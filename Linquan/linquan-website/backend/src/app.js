@@ -10,6 +10,7 @@ import schedulingRoutes from './routes/schedulingRoutes.js';
 import concertRoutes from './routes/concertRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import classMatchingRoutes from './routes/classMatchingRoutes.js';
+import imslpRoutes from './routes/imslpRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -44,6 +45,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api', activityRoutes);
+app.use('/api', imslpRoutes);
 app.use('/api', profileRoutes);
 app.use('/api', schedulingRoutes);
 app.use('/api', concertRoutes);
