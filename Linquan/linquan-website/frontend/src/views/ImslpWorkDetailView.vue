@@ -8,6 +8,22 @@
       <h2 class="section-title">{{ detail.title }}</h2>
       <p class="subtle">{{ detail.permlink }}</p>
 
+      <div v-if="detail.metadata" class="metadata-panel">
+        <div class="meta-row">
+          <span v-if="detail.metadata.type" class="meta-tag type">{{ detail.metadata.type }}</span>
+          <span v-if="detail.metadata.tone && detail.metadata.mode" class="meta-tag key">
+            {{ detail.metadata.tone }} {{ detail.metadata.mode }}
+          </span>
+          <span
+            v-for="instr in detail.metadata.instruments"
+            :key="instr"
+            class="meta-tag instrument"
+          >
+            {{ instr }}
+          </span>
+        </div>
+      </div>
+
       <h3 class="subsection-title">{{ t('imslp.scoreFiles') }}</h3>
       <ul v-if="detail.images && detail.images.length > 0" class="score-list">
         <li v-for="img in detail.images" :key="img.id" class="score-card">
@@ -140,5 +156,44 @@ onMounted(async () => {
 
 .warn {
   color: var(--warn);
+}
+
+.metadata-panel {
+  margin: 0.6rem 0 1rem;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.meta-tag {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.meta-tag.type {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.3);
+  color: var(--accent);
+}
+
+.meta-tag.key {
+  background: rgba(var(--warn-rgb), 0.08);
+  border-color: rgba(var(--warn-rgb), 0.25);
+  color: var(--warn);
+}
+
+.meta-tag.instrument {
+  background: rgba(var(--success-rgb), 0.08);
+  border-color: rgba(var(--success-rgb), 0.25);
+  color: var(--success);
 }
 </style>

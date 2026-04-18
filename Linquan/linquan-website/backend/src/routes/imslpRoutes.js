@@ -4,6 +4,7 @@ import http from 'http';
 import path from 'path';
 import { URL } from 'url';
 import { callImslp, searchBingImslp, mergeSearchResults } from '../services/imslpService.js';
+import { getWorkMetadata, getComposerMetadata } from '../services/imslpMetadataService.js';
 import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
 
@@ -96,6 +97,10 @@ router.get('/imslp/works/:permlink', async (req, res, next) => {
       throw new HttpError(400, 'Invalid permlink');
     }
     const data = await callImslp('work_detail', { permlink });
+    const metadata = getWorkMetadata(data?.title);
+    if (metadata) {
+      data.metadata = metadata;
+    }
     res.json(data);
   } catch (err) {
     next(err);
@@ -109,6 +114,10 @@ router.get('/imslp/people/:permlink', async (req, res, next) => {
       throw new HttpError(400, 'Invalid permlink');
     }
     const data = await callImslp('person_detail', { permlink });
+    const metadata = getComposerMetadata(data?.name);
+    if (metadata) {
+      data.metadata = metadata;
+    }
     res.json(data);
   } catch (err) {
     next(err);

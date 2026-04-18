@@ -9,8 +9,12 @@
   --ink: #f4f4f4;
   --muted: #aeb3b9;
   --accent: #f0f0f0;
+  --accent-rgb: 240, 240, 240;
   --accent-strong: #dadada;
   --warn: #c16363;
+  --warn-rgb: 193, 99, 99;
+  --success: #166f2f;
+  --success-rgb: 22, 111, 47;
   --line: #2b3036;
   --shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
   --radius: 14px;
