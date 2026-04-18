@@ -24,3 +24,8 @@ export const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 export const SMTP_USER = process.env.SMTP_USER || '';
 export const SMTP_PASS = process.env.SMTP_PASS || '';
 export const SMTP_FROM = process.env.SMTP_FROM || 'NJU林泉钢琴社 <no-reply@example.com>';
+
+// Bing Web Search API key (optional). If set, IMSLP search uses Bing API
+// for better Chinese support and broader coverage.
+// Free tier: 1,000 transactions/month at https://www.microsoft.com/en-us/bing/apis/bing-web-search-api
+export const BING_SEARCH_KEY = process.env.BING_SEARCH_KEY || '';

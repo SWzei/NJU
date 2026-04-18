@@ -3,7 +3,8 @@ import https from 'https';
 import http from 'http';
 import path from 'path';
 import { URL } from 'url';
-import { callImslp } from '../services/imslpService.js';
+import { callImslp, searchBingImslp, mergeSearchResults } from '../services/imslpService.js';
+import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
 
 const router = express.Router();
@@ -29,11 +30,31 @@ function validateImslpUrl(rawUrl) {
 router.get('/imslp/works', async (req, res, next) => {
   try {
     const { title, composer } = req.query;
-    const data = await callImslp('search_works', {
-      title: title || undefined,
-      composer: composer || undefined,
-    });
-    res.json(data);
+
+    // Build Bing query string
+    const bingQuery = [composer, title].filter(Boolean).join(' ');
+
+    let bingPromise;
+    if (BING_SEARCH_KEY && bingQuery) {
+      bingPromise = searchBingImslp(bingQuery, 20);
+    } else {
+      bingPromise = Promise.resolve({ items: [] });
+    }
+
+    const [localData, bingData] = await Promise.all([
+      callImslp('search_works', {
+        title: title || undefined,
+        composer: composer || undefined,
+      }),
+      bingPromise,
+    ]);
+
+    const merged = mergeSearchResults(
+      localData?.items || [],
+      bingData?.items || []
+    );
+
+    res.json({ items: merged });
   } catch (err) {
     next(err);
   }
@@ -42,10 +63,27 @@ router.get('/imslp/works', async (req, res, next) => {
 router.get('/imslp/people', async (req, res, next) => {
   try {
     const { name } = req.query;
-    const data = await callImslp('search_people', {
-      name: name || undefined,
-    });
-    res.json(data);
+
+    let bingPromise;
+    if (BING_SEARCH_KEY && name) {
+      bingPromise = searchBingImslp(name, 20);
+    } else {
+      bingPromise = Promise.resolve({ items: [] });
+    }
+
+    const [localData, bingData] = await Promise.all([
+      callImslp('search_people', {
+        name: name || undefined,
+      }),
+      bingPromise,
+    ]);
+
+    const merged = mergeSearchResults(
+      localData?.items || [],
+      bingData?.items || []
+    );
+
+    res.json({ items: merged });
   } catch (err) {
     next(err);
   }

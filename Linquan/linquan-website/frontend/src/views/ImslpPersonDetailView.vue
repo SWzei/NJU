@@ -19,7 +19,16 @@
             </thead>
             <tbody>
               <tr v-for="(row, ridx) in rows" :key="ridx">
-                <td v-for="(header, hidx) in tableHeaders(rows)" :key="hidx">{{ row[header] || '' }}</td>
+                <td v-for="(header, hidx) in tableHeaders(rows)" :key="hidx">
+                  <router-link
+                    v-if="getLink(row, header)"
+                    :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
+                    class="work-link"
+                  >
+                    {{ row[header] || '' }}
+                  </router-link>
+                  <span v-else>{{ row[header] || '' }}</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -51,7 +60,11 @@ const error = ref('');
 
 function tableHeaders(rows) {
   if (!rows || rows.length === 0) return [];
-  return Object.keys(rows[0]);
+  return Object.keys(rows[0]).filter((h) => !h.startsWith('__link_'));
+}
+
+function getLink(row, header) {
+  return row[`__link_${header}`];
 }
 
 onMounted(async () => {
@@ -123,5 +136,14 @@ tr:last-child td {
 
 .warn {
   color: var(--warn);
+}
+
+.work-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.work-link:hover {
+  text-decoration: underline;
 }
 </style>
