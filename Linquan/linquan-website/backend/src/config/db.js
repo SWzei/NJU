@@ -138,6 +138,8 @@ function ensureSqliteConcertApplicationsMultiEntry(db) {
           note TEXT,
           status TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'accepted', 'rejected', 'waitlist')),
           feedback TEXT,
+          audition_status TEXT CHECK (audition_status IN ('pending', 'passed', 'failed')),
+          audition_feedback TEXT,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
@@ -149,12 +151,12 @@ function ensureSqliteConcertApplicationsMultiEntry(db) {
         INSERT INTO concert_applications (
           id, concert_id, user_id, applicant_name, applicant_student_number,
           piece_zh, piece_en, duration_min, contact_qq, piece_title, composer,
-          score_file_path, note, status, feedback, created_at, updated_at
+          score_file_path, note, status, feedback, audition_status, audition_feedback, created_at, updated_at
         )
         SELECT
           id, concert_id, user_id, applicant_name, applicant_student_number,
           piece_zh, piece_en, duration_min, contact_qq, piece_title, composer,
-          score_file_path, note, status, feedback, created_at, updated_at
+          score_file_path, note, status, feedback, NULL, NULL, created_at, updated_at
         FROM concert_applications_old_multi
       `);
 
@@ -292,12 +294,64 @@ function ensureSqliteRuntimeSchema(db) {
   ensureColumn(db, 'profiles', 'hobbies', 'TEXT');
   ensureColumn(db, 'profiles', 'piano_interests', 'TEXT');
   ensureColumn(db, 'profiles', 'wechat_account', 'TEXT');
+  ensureColumn(db, 'profiles', 'campus', 'TEXT');
   ensureColumn(db, 'concert_applications', 'applicant_name', 'TEXT');
   ensureColumn(db, 'concert_applications', 'applicant_student_number', 'TEXT');
   ensureColumn(db, 'concert_applications', 'piece_zh', 'TEXT');
   ensureColumn(db, 'concert_applications', 'piece_en', 'TEXT');
   ensureColumn(db, 'concert_applications', 'duration_min', 'INTEGER');
   ensureColumn(db, 'concert_applications', 'contact_qq', 'TEXT');
+  ensureColumn(db, 'concert_applications', 'audition_status', 'TEXT');
+  ensureColumn(db, 'concert_applications', 'audition_feedback', 'TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_auditions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      announcement TEXT,
+      audition_time TEXT,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+      attachment_path TEXT,
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_segments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      rest_after_min INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_segments_concert ON concert_segments(concert_id, display_order)');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS concert_program_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      concert_id INTEGER NOT NULL,
+      segment_id INTEGER NOT NULL,
+      application_id INTEGER NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      interval_before_min INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE,
+      FOREIGN KEY (segment_id) REFERENCES concert_segments(id) ON DELETE CASCADE,
+      FOREIGN KEY (application_id) REFERENCES concert_applications(id) ON DELETE CASCADE,
+      UNIQUE (concert_id, application_id)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_program_items_segment ON concert_program_items(segment_id, display_order)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_concert_program_items_concert ON concert_program_items(concert_id)');
   db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_terms (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,6 +374,14 @@ function ensureSqliteRuntimeSchema(db) {
       UNIQUE (term_id, day_of_week, hour)
     )
   `);
+  ensureColumn(db, 'class_matching_profiles', 'campus', 'TEXT');
+  ensureColumn(db, 'class_matching_profiles', 'budget_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'budget_max', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'fee_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'fee_max', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'student_skill_level', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'teacher_skill_min', 'INTEGER');
+  ensureColumn(db, 'class_matching_profiles', 'teacher_skill_max', 'INTEGER');
   db.exec(`
     CREATE TABLE IF NOT EXISTS class_matching_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,14 +389,22 @@ function ensureSqliteRuntimeSchema(db) {
       user_id INTEGER NOT NULL,
       participant_type TEXT NOT NULL CHECK (participant_type IN ('student', 'teacher')),
       matching_mode TEXT NOT NULL DEFAULT 'ranking' CHECK (matching_mode IN ('direct', 'ranking')),
+      campus TEXT,
       skill_level TEXT,
       learning_goals TEXT,
       budget_expectation TEXT,
+      budget_min INTEGER,
+      budget_max INTEGER,
       teaching_experience TEXT,
       skill_specialization TEXT,
       fee_expectation TEXT,
+      fee_min INTEGER,
+      fee_max INTEGER,
       capacity INTEGER,
       direct_target_user_id INTEGER,
+      student_skill_level INTEGER,
+      teacher_skill_min INTEGER,
+      teacher_skill_max INTEGER,
       qualification_status TEXT NOT NULL DEFAULT 'pending' CHECK (qualification_status IN ('pending', 'approved', 'rejected')),
       qualification_feedback TEXT,
       reviewed_by INTEGER,
@@ -521,14 +591,54 @@ function ensurePostgresRuntimeSchema(db) {
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS hobbies TEXT;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS piano_interests TEXT;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS wechat_account TEXT;
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS campus TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_name TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS applicant_student_number TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_zh TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS piece_en TEXT;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS duration_min INTEGER;
     ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS contact_qq TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS audition_status TEXT;
+    ALTER TABLE concert_applications ADD COLUMN IF NOT EXISTS audition_feedback TEXT;
+    CREATE TABLE IF NOT EXISTS concert_auditions (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      announcement TEXT,
+      audition_time TIMESTAMP,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'open', 'closed')),
+      attachment_path TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_auditions_concert ON concert_auditions(concert_id, status, created_at DESC);
     ALTER TABLE concert_applications DROP CONSTRAINT IF EXISTS concert_applications_concert_id_user_id_key;
     DROP INDEX IF EXISTS idx_concert_applications_concert_user_unique;
+    CREATE TABLE IF NOT EXISTS concert_segments (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      rest_after_min INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_segments_concert ON concert_segments(concert_id, display_order);
+    CREATE TABLE IF NOT EXISTS concert_program_items (
+      id SERIAL PRIMARY KEY,
+      concert_id INTEGER NOT NULL REFERENCES concerts(id) ON DELETE CASCADE,
+      segment_id INTEGER NOT NULL REFERENCES concert_segments(id) ON DELETE CASCADE,
+      application_id INTEGER NOT NULL REFERENCES concert_applications(id) ON DELETE CASCADE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      interval_before_min INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (concert_id, application_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_concert_program_items_segment ON concert_program_items(segment_id, display_order);
+    CREATE INDEX IF NOT EXISTS idx_concert_program_items_concert ON concert_program_items(concert_id);
   `);
 
   db.exec(`
@@ -549,20 +659,36 @@ function ensurePostgresRuntimeSchema(db) {
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (term_id, day_of_week, hour)
     );
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS campus TEXT;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS budget_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS budget_max INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS fee_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS fee_max INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS student_skill_level INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS teacher_skill_min INTEGER;
+    ALTER TABLE class_matching_profiles ADD COLUMN IF NOT EXISTS teacher_skill_max INTEGER;
     CREATE TABLE IF NOT EXISTS class_matching_profiles (
       id SERIAL PRIMARY KEY,
       term_id INTEGER NOT NULL REFERENCES class_matching_terms(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       participant_type TEXT NOT NULL CHECK (participant_type IN ('student', 'teacher')),
       matching_mode TEXT NOT NULL DEFAULT 'ranking' CHECK (matching_mode IN ('direct', 'ranking')),
+      campus TEXT,
       skill_level TEXT,
       learning_goals TEXT,
       budget_expectation TEXT,
+      budget_min INTEGER,
+      budget_max INTEGER,
       teaching_experience TEXT,
       skill_specialization TEXT,
       fee_expectation TEXT,
+      fee_min INTEGER,
+      fee_max INTEGER,
       capacity INTEGER,
       direct_target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      student_skill_level INTEGER,
+      teacher_skill_min INTEGER,
+      teacher_skill_max INTEGER,
       qualification_status TEXT NOT NULL DEFAULT 'pending' CHECK (qualification_status IN ('pending', 'approved', 'rejected')),
       qualification_feedback TEXT,
       reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,

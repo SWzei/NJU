@@ -15,6 +15,9 @@ import AdminClassMatchingView from '@/views/AdminClassMatchingView.vue';
 import AdminConcertsView from '@/views/AdminConcertsView.vue';
 import AdminGalleryView from '@/views/AdminGalleryView.vue';
 import AdminMembersView from '@/views/AdminMembersView.vue';
+import ImslpView from '@/views/ImslpView.vue';
+import ImslpWorkDetailView from '@/views/ImslpWorkDetailView.vue';
+import ImslpPersonDetailView from '@/views/ImslpPersonDetailView.vue';
 
 const routes = [
   {
@@ -68,8 +71,22 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/imslp',
+    name: 'imslp',
+    component: ImslpView
+  },
+  {
+    path: '/imslp/works/:permlink',
+    name: 'imslpWorkDetail',
+    component: ImslpWorkDetailView
+  },
+  {
+    path: '/imslp/people/:permlink',
+    name: 'imslpPersonDetail',
+    component: ImslpPersonDetailView
+  },
+  {
     path: '/admin',
-    name: 'admin',
     component: AdminLayoutView,
     meta: { requiresAuth: true, requiresAdmin: true },
     children: [

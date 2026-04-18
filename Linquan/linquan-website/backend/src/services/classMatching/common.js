@@ -167,7 +167,8 @@ export function loadBaseProfile(userId) {
            p.hobbies,
            p.piano_interests AS "pianoInterests",
            p.wechat_account AS "wechatAccount",
-           p.phone
+           p.phone,
+           p.campus
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
          WHERE u.id = ?`
@@ -190,16 +191,24 @@ export function loadParticipantProfiles(termId) {
          p.grade,
          p.major,
          p.academy,
+         COALESCE(p.campus, cmp.campus) AS "campus",
          cmp.participant_type AS "participantType",
          cmp.matching_mode AS "matchingMode",
          cmp.skill_level AS "skillLevel",
          cmp.learning_goals AS "learningGoals",
          cmp.budget_expectation AS "budgetExpectation",
+         cmp.budget_min AS "budgetMin",
+         cmp.budget_max AS "budgetMax",
          cmp.teaching_experience AS "teachingExperience",
          cmp.skill_specialization AS "skillSpecialization",
          cmp.fee_expectation AS "feeExpectation",
+         cmp.fee_min AS "feeMin",
+         cmp.fee_max AS "feeMax",
          cmp.capacity,
          cmp.direct_target_user_id AS "directTargetUserId",
+         cmp.student_skill_level AS "studentSkillLevel",
+         cmp.teacher_skill_min AS "teacherSkillMin",
+         cmp.teacher_skill_max AS "teacherSkillMax",
          cmp.qualification_status AS "qualificationStatus",
          cmp.qualification_feedback AS "qualificationFeedback",
          cmp.reviewed_by AS "reviewedBy",
@@ -229,14 +238,22 @@ export function loadParticipantProfile(termId, userId) {
            user_id AS "userId",
            participant_type AS "participantType",
            matching_mode AS "matchingMode",
+           campus,
            skill_level AS "skillLevel",
            learning_goals AS "learningGoals",
            budget_expectation AS "budgetExpectation",
+           budget_min AS "budgetMin",
+           budget_max AS "budgetMax",
            teaching_experience AS "teachingExperience",
            skill_specialization AS "skillSpecialization",
            fee_expectation AS "feeExpectation",
+           fee_min AS "feeMin",
+           fee_max AS "feeMax",
            capacity,
            direct_target_user_id AS "directTargetUserId",
+           student_skill_level AS "studentSkillLevel",
+           teacher_skill_min AS "teacherSkillMin",
+           teacher_skill_max AS "teacherSkillMax",
            qualification_status AS "qualificationStatus",
            qualification_feedback AS "qualificationFeedback",
            reviewed_by AS "reviewedBy",
@@ -356,10 +373,15 @@ export function buildCandidateLists(termId, currentUserId) {
       userId: item.userId,
       studentNumber: item.studentNumber,
       displayName: item.displayName,
+      campus: item.campus,
       matchingMode: item.matchingMode,
       capacity: item.capacity,
       skillSpecialization: item.skillSpecialization,
       feeExpectation: item.feeExpectation,
+      feeMin: item.feeMin,
+      feeMax: item.feeMax,
+      teacherSkillMin: item.teacherSkillMin,
+      teacherSkillMax: item.teacherSkillMax,
       qualificationStatus: item.qualificationStatus
     }));
   const studentCandidates = profiles
@@ -368,9 +390,13 @@ export function buildCandidateLists(termId, currentUserId) {
       userId: item.userId,
       studentNumber: item.studentNumber,
       displayName: item.displayName,
+      campus: item.campus,
       matchingMode: item.matchingMode,
       skillLevel: item.skillLevel,
-      learningGoals: item.learningGoals
+      learningGoals: item.learningGoals,
+      budgetMin: item.budgetMin,
+      budgetMax: item.budgetMax,
+      studentSkillLevel: item.studentSkillLevel
     }));
 
   return { teacherCandidates, studentCandidates };
@@ -467,6 +493,46 @@ export function saveProfile({ termId, userId, input }) {
     throw new HttpError(400, 'matchingMode must be direct or ranking');
   }
 
+  const campusValue = Object.prototype.hasOwnProperty.call(input, 'campus')
+    ? input.campus
+    : current?.campus || null;
+  if (campusValue && !['仙林', '鼓楼', '苏州', '浦口', '其它'].includes(campusValue)) {
+    throw new HttpError(400, 'Invalid campus value');
+  }
+
+  const budgetMin = Object.prototype.hasOwnProperty.call(input, 'budgetMin')
+    ? input.budgetMin
+    : current?.budgetMin ?? null;
+  const budgetMax = Object.prototype.hasOwnProperty.call(input, 'budgetMax')
+    ? input.budgetMax
+    : current?.budgetMax ?? null;
+  if (budgetMin != null && budgetMax != null && Number(budgetMin) > Number(budgetMax)) {
+    throw new HttpError(400, 'budgetMin must not exceed budgetMax');
+  }
+
+  const feeMin = Object.prototype.hasOwnProperty.call(input, 'feeMin')
+    ? input.feeMin
+    : current?.feeMin ?? null;
+  const feeMax = Object.prototype.hasOwnProperty.call(input, 'feeMax')
+    ? input.feeMax
+    : current?.feeMax ?? null;
+  if (feeMin != null && feeMax != null && Number(feeMin) > Number(feeMax)) {
+    throw new HttpError(400, 'feeMin must not exceed feeMax');
+  }
+
+  const studentSkillLevel = Object.prototype.hasOwnProperty.call(input, 'studentSkillLevel')
+    ? input.studentSkillLevel
+    : current?.studentSkillLevel ?? null;
+  const teacherSkillMin = Object.prototype.hasOwnProperty.call(input, 'teacherSkillMin')
+    ? input.teacherSkillMin
+    : current?.teacherSkillMin ?? null;
+  const teacherSkillMax = Object.prototype.hasOwnProperty.call(input, 'teacherSkillMax')
+    ? input.teacherSkillMax
+    : current?.teacherSkillMax ?? null;
+  if (teacherSkillMin != null && teacherSkillMax != null && Number(teacherSkillMin) > Number(teacherSkillMax)) {
+    throw new HttpError(400, 'teacherSkillMin must not exceed teacherSkillMax');
+  }
+
   const directTargetUserId =
     Object.prototype.hasOwnProperty.call(input, 'directTargetUserId')
       ? (input.directTargetUserId ? Number(input.directTargetUserId) : null)
@@ -475,11 +541,14 @@ export function saveProfile({ termId, userId, input }) {
 
   const qualificationStatus = nextParticipantType === 'teacher' ? current?.qualificationStatus || 'pending' : 'pending';
   const values = {
+    campus: campusValue,
     skillLevel: Object.prototype.hasOwnProperty.call(input, 'skillLevel') ? input.skillLevel : current?.skillLevel || null,
     learningGoals: Object.prototype.hasOwnProperty.call(input, 'learningGoals') ? input.learningGoals : current?.learningGoals || null,
     budgetExpectation: Object.prototype.hasOwnProperty.call(input, 'budgetExpectation')
       ? input.budgetExpectation
       : current?.budgetExpectation || null,
+    budgetMin: budgetMin,
+    budgetMax: budgetMax,
     teachingExperience: Object.prototype.hasOwnProperty.call(input, 'teachingExperience')
       ? input.teachingExperience
       : current?.teachingExperience || null,
@@ -489,9 +558,14 @@ export function saveProfile({ termId, userId, input }) {
     feeExpectation: Object.prototype.hasOwnProperty.call(input, 'feeExpectation')
       ? input.feeExpectation
       : current?.feeExpectation || null,
+    feeMin: feeMin,
+    feeMax: feeMax,
     capacity: nextParticipantType === 'teacher'
       ? clampCapacity(Object.prototype.hasOwnProperty.call(input, 'capacity') ? input.capacity : current?.capacity)
-      : null
+      : null,
+    studentSkillLevel: studentSkillLevel,
+    teacherSkillMin: teacherSkillMin,
+    teacherSkillMax: teacherSkillMax
   };
   const shouldClearRankings = nextMatchingMode === 'direct';
 
@@ -499,21 +573,30 @@ export function saveProfile({ termId, userId, input }) {
     if (current) {
       db.prepare(
         `UPDATE class_matching_profiles
-         SET participant_type = ?, matching_mode = ?, skill_level = ?, learning_goals = ?, budget_expectation = ?,
-             teaching_experience = ?, skill_specialization = ?, fee_expectation = ?, capacity = ?,
-             direct_target_user_id = ?, qualification_status = ?, updated_at = ?
+         SET participant_type = ?, matching_mode = ?, campus = ?, skill_level = ?, learning_goals = ?, budget_expectation = ?,
+             budget_min = ?, budget_max = ?, teaching_experience = ?, skill_specialization = ?, fee_expectation = ?,
+             fee_min = ?, fee_max = ?, capacity = ?, direct_target_user_id = ?, student_skill_level = ?, teacher_skill_min = ?,
+             teacher_skill_max = ?, qualification_status = ?, updated_at = ?
          WHERE term_id = ? AND user_id = ?`
       ).run(
         nextParticipantType,
         nextMatchingMode,
+        values.campus,
         values.skillLevel,
         values.learningGoals,
         values.budgetExpectation,
+        values.budgetMin,
+        values.budgetMax,
         values.teachingExperience,
         values.skillSpecialization,
         values.feeExpectation,
+        values.feeMin,
+        values.feeMax,
         values.capacity,
         nextMatchingMode === 'direct' ? directTargetUserId : null,
+        values.studentSkillLevel,
+        values.teacherSkillMin,
+        values.teacherSkillMax,
         qualificationStatus,
         nowUtc,
         termId,
@@ -527,23 +610,32 @@ export function saveProfile({ termId, userId, input }) {
 
     db.prepare(
       `INSERT INTO class_matching_profiles (
-         term_id, user_id, participant_type, matching_mode, skill_level, learning_goals, budget_expectation,
-         teaching_experience, skill_specialization, fee_expectation, capacity, direct_target_user_id,
+         term_id, user_id, participant_type, matching_mode, campus, skill_level, learning_goals, budget_expectation,
+         budget_min, budget_max, teaching_experience, skill_specialization, fee_expectation, fee_min, fee_max,
+         capacity, direct_target_user_id, student_skill_level, teacher_skill_min, teacher_skill_max,
          qualification_status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       termId,
       userId,
       nextParticipantType,
       nextMatchingMode,
+      values.campus,
       values.skillLevel,
       values.learningGoals,
       values.budgetExpectation,
+      values.budgetMin,
+      values.budgetMax,
       values.teachingExperience,
       values.skillSpecialization,
       values.feeExpectation,
+      values.feeMin,
+      values.feeMax,
       values.capacity,
       nextMatchingMode === 'direct' ? directTargetUserId : null,
+      values.studentSkillLevel,
+      values.teacherSkillMin,
+      values.teacherSkillMax,
       qualificationStatus,
       nowUtc,
       nowUtc

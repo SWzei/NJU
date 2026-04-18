@@ -15,6 +15,7 @@
           <router-link v-if="auth.isAuthenticated" to="/schedule">{{ t('app.navSchedule') }}</router-link>
           <router-link v-if="auth.isAuthenticated" to="/class-matching">{{ t('app.navClassMatching') }}</router-link>
           <router-link to="/concerts">{{ t('app.navConcerts') }}</router-link>
+          <router-link to="/imslp">{{ t('app.navImslp') }}</router-link>
           <router-link v-if="auth.isAuthenticated" to="/members">{{ t('app.navMembers') }}</router-link>
           <router-link v-if="auth.isAuthenticated" to="/profile">{{ t('app.navProfile') }}</router-link>
           <router-link v-if="auth.isAdmin" to="/admin">{{ t('app.navAdmin') }}</router-link>
