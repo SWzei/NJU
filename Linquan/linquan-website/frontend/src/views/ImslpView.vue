@@ -104,7 +104,7 @@
             <h3>{{ displayTitle(item) }}</h3>
             <p class="subtle">{{ displaySubtitle(item) }}</p>
             <div v-if="activeTab === 'works' && item.metadata" class="meta-tags">
-              <span v-if="item.metadata.type" class="meta-tag type">{{ item.metadata.type }}</span>
+              <span v-if="item.metadata.type" class="meta-tag type" :style="tagStyle(item.metadata.type)">{{ item.metadata.type }}</span>
               <span v-if="item.metadata.tone && item.metadata.mode" class="meta-tag key">
                 {{ item.metadata.tone }} {{ item.metadata.mode }}
               </span>
@@ -112,6 +112,7 @@
                 v-for="instr in item.metadata.instruments"
                 :key="instr"
                 class="meta-tag instrument"
+                :style="tagStyle(instr)"
               >
                 {{ instr }}
               </span>
@@ -135,6 +136,7 @@ import { ref, onMounted } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
+import { tagStyle } from '@/utils/tagColors';
 
 const { t } = useI18n();
 const { showError } = useToast();

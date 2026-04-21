@@ -24,6 +24,7 @@
             v-for="item in detail.metadata.typeDistribution.slice(0, 8)"
             :key="item.type"
             class="meta-tag"
+            :style="tagStyle(item.type)"
           >
             {{ item.type }} ({{ item.count }})
           </span>
@@ -34,6 +35,7 @@
             v-for="item in detail.metadata.instrumentDistribution.slice(0, 8)"
             :key="item.instrument"
             class="meta-tag instrument"
+            :style="tagStyle(item.instrument)"
           >
             {{ item.instrument }} ({{ item.count }})
           </span>
@@ -143,6 +145,7 @@ import { useRoute } from 'vue-router';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
+import { tagStyle, getTagColor } from '@/utils/tagColors';
 
 const route = useRoute();
 const { t } = useI18n();
@@ -206,7 +209,7 @@ function buildPieChart(chart) {
     return {
       label,
       value,
-      color: chart.colors[i],
+      color: getTagColor(label),
       percentage: ((value / total) * 100).toFixed(1),
       path,
     };
@@ -423,6 +426,8 @@ tr:last-child td {
     flex-wrap: wrap;
     column-count: 2;
     display: block;
+    column-gap: 2rem;
+    column-rule: 1px solid var(--line);
   }
 
   .chart-legend li {

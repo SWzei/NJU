@@ -10,7 +10,7 @@
 
       <div v-if="detail.metadata" class="metadata-panel">
         <div class="meta-row">
-          <span v-if="detail.metadata.type" class="meta-tag type">{{ detail.metadata.type }}</span>
+          <span v-if="detail.metadata.type" class="meta-tag type" :style="tagStyle(detail.metadata.type)">{{ detail.metadata.type }}</span>
           <span v-if="detail.metadata.tone && detail.metadata.mode" class="meta-tag key">
             {{ detail.metadata.tone }} {{ detail.metadata.mode }}
           </span>
@@ -18,6 +18,7 @@
             v-for="instr in detail.metadata.instruments"
             :key="instr"
             class="meta-tag instrument"
+            :style="tagStyle(instr)"
           >
             {{ instr }}
           </span>
@@ -57,6 +58,7 @@ import { useRoute } from 'vue-router';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
+import { tagStyle } from '@/utils/tagColors';
 
 const route = useRoute();
 const { t } = useI18n();
