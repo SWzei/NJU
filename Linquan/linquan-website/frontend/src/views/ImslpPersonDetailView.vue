@@ -114,14 +114,33 @@
                   <tbody>
                     <tr v-for="(row, ridx) in groups[groupKey]" :key="ridx">
                       <td v-for="(header, hidx) in tableHeaders(groups[groupKey])" :key="hidx">
-                        <router-link
-                          v-if="getLink(row, header)"
-                          :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
-                          class="work-link"
-                        >
-                          {{ row[header] || '' }}
-                        </router-link>
-                        <span v-else>{{ row[header] || '' }}</span>
+                        <div class="cell-content">
+                          <router-link
+                            v-if="getLink(row, header)"
+                            :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
+                            class="work-link"
+                          >
+                            {{ row[header] || '' }}
+                          </router-link>
+                          <span v-else>{{ row[header] || '' }}</span>
+                          <template v-if="header === 'Title' && row.__metadata">
+                            <span
+                              v-if="row.__metadata.type"
+                              class="inline-tag type"
+                              :style="tagStyle(row.__metadata.type)"
+                            >{{ row.__metadata.type }}</span>
+                            <span
+                              v-if="row.__metadata.tone && row.__metadata.mode"
+                              class="inline-tag key"
+                            >{{ row.__metadata.tone }} {{ row.__metadata.mode }}</span>
+                            <span
+                              v-for="instr in row.__metadata.instruments"
+                              :key="instr"
+                              class="inline-tag instrument"
+                              :style="tagStyle(instr)"
+                            >{{ instr }}</span>
+                          </template>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
@@ -160,7 +179,7 @@ const error = ref('');
 
 function tableHeaders(rows) {
   if (!rows || rows.length === 0) return [];
-  return Object.keys(rows[0]).filter((h) => !h.startsWith('__link_'));
+  return Object.keys(rows[0]).filter((h) => !h.startsWith('__link_') && h !== '__metadata');
 }
 
 function getLink(row, header) {
@@ -478,5 +497,39 @@ tr:last-child td {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--muted);
+}
+
+.cell-content {
+  display: inline;
+}
+
+.inline-tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.inline-tag.type {
+  background: rgba(var(--accent-rgb), 0.1);
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  color: var(--accent);
+}
+
+.inline-tag.key {
+  background: rgba(var(--warn-rgb), 0.08);
+  border: 1px solid rgba(var(--warn-rgb), 0.2);
+  color: var(--warn);
+}
+
+.inline-tag.instrument {
+  background: rgba(var(--success-rgb), 0.08);
+  border: 1px solid rgba(var(--success-rgb), 0.2);
+  color: var(--success);
 }
 </style>

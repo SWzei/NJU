@@ -12,6 +12,7 @@ import {
   getFilterOptions,
   getComposerTypeDistributionForChart,
   getComposerInstrumentDistributionForChart,
+  getWorksMetadataBatch,
 } from '../services/imslpMetadataService.js';
 import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
@@ -231,6 +232,27 @@ router.get('/imslp/people/:permlink/works', async (req, res, next) => {
         groupedTables[category] = groups;
       }
     }
+
+    // Batch-fetch metadata for all works
+    const allTitles = [];
+    for (const category of Object.values(groupedTables)) {
+      for (const group of Object.values(category)) {
+        for (const row of group) {
+          if (row.Title) allTitles.push(row.Title);
+        }
+      }
+    }
+    const batchMeta = getWorksMetadataBatch(allTitles);
+    for (const category of Object.values(groupedTables)) {
+      for (const group of Object.values(category)) {
+        for (const row of group) {
+          if (row.Title && batchMeta[row.Title]) {
+            row.__metadata = batchMeta[row.Title];
+          }
+        }
+      }
+    }
+
     res.json({ groupedTables });
   } catch (err) {
     next(err);

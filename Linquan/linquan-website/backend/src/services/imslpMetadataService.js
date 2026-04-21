@@ -316,6 +316,44 @@ export function getFilterOptions() {
 }
 
 /**
+ * Fetch metadata for multiple works by their full titles.
+ * Returns a map: title -> metadata object.
+ */
+export function getWorksMetadataBatch(titles) {
+  const conn = getDb();
+  if (!conn || !titles || titles.length === 0) return {};
+
+  const placeholders = titles.map(() => '?').join(',');
+  const sql = `
+    SELECT w.title, t.type, w.Mode, w.Tone,
+      w.piano, w.violin, w.flute, w.clarinet, w.oboe,
+      w.trumpet, w.horn, w.cello, w.viola, w.guitar,
+      w.contrabass, w.string, w.wind, w.organ
+    FROM works AS w
+    LEFT JOIN Types AS t ON w.FK_Type = t.PK_type
+    WHERE w.title IN (${placeholders})
+  `;
+
+  const rows = conn.prepare(sql).all(...titles);
+  const result = {};
+  for (const row of rows) {
+    const instruments = [];
+    for (const col of INSTRUMENT_COLUMNS) {
+      if (row[col]) {
+        instruments.push(col);
+      }
+    }
+    result[row.title] = {
+      type: row.type || null,
+      mode: row.Mode || null,
+      tone: row.Tone || null,
+      instruments,
+    };
+  }
+  return result;
+}
+
+/**
  * Return composer type distribution formatted for a chart.
  */
 export function getComposerTypeDistributionForChart(name) {
