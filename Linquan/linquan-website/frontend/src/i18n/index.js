@@ -871,6 +871,10 @@ const messages = {
       typeDistributionChart: "作品类型分布",
       instrumentDistributionChart: "乐器分布",
       loadingWorks: "加载作品中…",
+      collectionHint: "以下为包含该作曲家作品的合集、改编与选集",
+      groupSelf: "本人的作品集",
+      groupOthers: "改编与编者作品",
+      groupVarious: "多人合集",
     },
   },
   en: {
@@ -1781,6 +1785,10 @@ const messages = {
       typeDistributionChart: "Work Type Distribution",
       instrumentDistributionChart: "Instrument Distribution",
       loadingWorks: "Loading works...",
+      collectionHint: "Collections, arrangements and editions containing works by this composer",
+      groupSelf: "Own Works",
+      groupOthers: "Arrangements and Editions by Others",
+      groupVarious: "Various Artists Collections",
     },
   },
 };

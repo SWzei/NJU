@@ -188,14 +188,50 @@ router.get('/imslp/people/:permlink', async (req, res, next) => {
   }
 });
 
+function extractAuthorFromTitle(title) {
+  const m = String(title).match(/\(([^)]+)\)$/);
+  return m ? m[1].trim() : '';
+}
+
+function groupCategoryRows(rows, composerName) {
+  const self = [];
+  const various = [];
+  const others = [];
+  for (const row of rows) {
+    const author = extractAuthorFromTitle(row.Title);
+    if (author === composerName) {
+      self.push(row);
+    } else if (author === 'Various') {
+      various.push(row);
+    } else {
+      others.push(row);
+    }
+  }
+  const result = {};
+  if (self.length) result.self = self;
+  if (others.length) result.others = others;
+  if (various.length) result.various = various;
+  return result;
+}
+
 router.get('/imslp/people/:permlink/works', async (req, res, next) => {
   try {
     const { permlink } = req.params;
     if (!permlink || permlink.length > 512) {
       throw new HttpError(400, 'Invalid permlink');
     }
+    const composerName = permlink.replace(/_/g, ' ');
     const data = await callImslp('person_detail', { permlink });
-    res.json({ categoryTables: data?.categoryTables || {} });
+    const rawTables = data?.categoryTables || {};
+    const groupedTables = {};
+    for (const [category, rows] of Object.entries(rawTables)) {
+      if (!rows || !rows.length) continue;
+      const groups = groupCategoryRows(rows, composerName);
+      if (Object.keys(groups).length > 0) {
+        groupedTables[category] = groups;
+      }
+    }
+    res.json({ groupedTables });
   } catch (err) {
     next(err);
   }

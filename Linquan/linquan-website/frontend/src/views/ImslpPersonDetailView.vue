@@ -88,34 +88,48 @@
 
       <div v-if="loadingWorks" class="subtle">{{ t('imslp.loadingWorks') }}</div>
       <div v-else>
-        <div v-for="(rows, subcategory) in categoryTables" :key="subcategory" class="category-block">
-          <h3 class="subsection-title">{{ subcategory }}</h3>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th v-for="(header, idx) in tableHeaders(rows)" :key="idx">{{ header }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, ridx) in rows" :key="ridx">
-                  <td v-for="(header, hidx) in tableHeaders(rows)" :key="hidx">
-                    <router-link
-                      v-if="getLink(row, header)"
-                      :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
-                      class="work-link"
-                    >
-                      {{ row[header] || '' }}
-                    </router-link>
-                    <span v-else>{{ row[header] || '' }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div v-for="(groups, category) in groupedTables" :key="category" class="category-block">
+          <h3 class="subsection-title">{{ category }}</h3>
+          <p v-if="category === 'Collections'" class="collection-hint subtle">
+            {{ t('imslp.collectionHint') }}
+          </p>
+          <div
+            v-for="groupKey in ['self', 'others', 'various']"
+            :key="groupKey"
+            class="group-block"
+          >
+            <div v-if="groups[groupKey]?.length">
+              <h4 v-if="hasMultipleGroups(groups)" class="group-title">
+                {{ groupLabel(groupKey) }}
+              </h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th v-for="(header, idx) in tableHeaders(groups[groupKey])" :key="idx">{{ header }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ridx) in groups[groupKey]" :key="ridx">
+                      <td v-for="(header, hidx) in tableHeaders(groups[groupKey])" :key="hidx">
+                        <router-link
+                          v-if="getLink(row, header)"
+                          :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
+                          class="work-link"
+                        >
+                          {{ row[header] || '' }}
+                        </router-link>
+                        <span v-else>{{ row[header] || '' }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
-        <p v-if="Object.keys(categoryTables || {}).length === 0" class="subtle">
+        <p v-if="Object.keys(groupedTables || {}).length === 0" class="subtle">
           {{ t('imslp.noCategoryTables') }}
         </p>
       </div>
@@ -136,7 +150,7 @@ const { showError } = useToast();
 
 const permlink = route.params.permlink;
 const detail = ref({});
-const categoryTables = ref({});
+const groupedTables = ref({});
 const loadingMeta = ref(true);
 const loadingWorks = ref(true);
 const error = ref('');
@@ -158,6 +172,19 @@ function periodLabel(period) {
     Modern: t('imslp.periodModern'),
   };
   return map[period] || period;
+}
+
+function hasMultipleGroups(groups) {
+  return Object.keys(groups).filter((k) => groups[k]?.length > 0).length > 1;
+}
+
+function groupLabel(key) {
+  const map = {
+    self: t('imslp.groupSelf'),
+    others: t('imslp.groupOthers'),
+    various: t('imslp.groupVarious'),
+  };
+  return map[key] || key;
 }
 
 function buildPieChart(chart) {
@@ -212,11 +239,11 @@ onMounted(async () => {
   // 2. Load works list from IMSLP (slower)
   const worksPromise = api.get(`/imslp/people/${encodeURIComponent(permlink)}/works`).then(
     ({ data }) => {
-      categoryTables.value = data.categoryTables || {};
+      groupedTables.value = data.groupedTables || {};
     },
     () => {
       // Works load failure is non-fatal; just show empty tables
-      categoryTables.value = {};
+      groupedTables.value = {};
     }
   ).finally(() => {
     loadingWorks.value = false;
@@ -430,5 +457,21 @@ tr:last-child td {
   .chart-legend {
     width: 100%;
   }
+}
+
+.collection-hint {
+  font-size: 0.85rem;
+  margin: 0.2rem 0 0.6rem;
+}
+
+.group-block {
+  margin-top: 0.6rem;
+}
+
+.group-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
 }
 </style>
