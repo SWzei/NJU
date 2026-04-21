@@ -5,12 +5,21 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const META_DB_PATH = path.resolve(__dirname, '../../cache/imslp_metadata.db');
 
+export function normalizeText(str) {
+  if (!str) return '';
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 let db = null;
 
 function getDb() {
   if (!db) {
     try {
       db = new Database(META_DB_PATH, { readonly: true });
+      db.function('normalize_text', { deterministic: true }, (text) => {
+        if (text === null || text === undefined) return '';
+        return String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      });
     } catch (err) {
       // Metadata DB is optional; return null if missing
       return null;
@@ -163,21 +172,69 @@ function extractComposerFromTitle(title) {
  * Search works from the metadata database with optional filters.
  * Returns items shaped like IMSLP proxy results but with metadata attached.
  */
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'are', 'you', 'all', 'any', 'can', 'had', 'her', 'was',
+  'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new',
+  'now', 'old', 'see', 'two', 'way', 'who', 'boy', 'did', 'its', 'let', 'put',
+  'say', 'she', 'too', 'use', 'de', 'la', 'le', 'et', 'du', 'une', 'des',
+  'von', 'van', 'der', 'den', 'dem', 'das', 'die',
+]);
+
+const KEY_PATTERN = /^[a-g](-flat|-sharp)?$/;
+
+export function tokenizeQuery(query) {
+  if (!query) return [];
+  const raw = query
+    .split(/[\s,;:!?()[\]{}"']+/)
+    .map((t) => normalizeText(t))
+    .filter((t) => (t.length >= 3 || /^\d+$/.test(t) || KEY_PATTERN.test(t)) && !STOP_WORDS.has(t));
+
+  // Merge key + mode tokens (e.g. "b" + "minor" => "b minor")
+  const merged = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (KEY_PATTERN.test(raw[i]) && i + 1 < raw.length && (raw[i + 1] === 'minor' || raw[i + 1] === 'major')) {
+      merged.push(`${raw[i]} ${raw[i + 1]}`);
+      i++;
+    } else {
+      merged.push(raw[i]);
+    }
+  }
+
+  return [...new Set(merged)];
+}
+
 export function searchWorksMeta({ title, composer, period, instrument, type, limit = 50 }) {
   const conn = getDb();
   if (!conn) return [];
 
   const conditions = [];
   const params = [];
+  const scoreParts = [];
 
-  if (title) {
-    conditions.push('w.title LIKE ?');
-    params.push(`%${title}%`);
+  const titleTokens = title ? tokenizeQuery(title) : [];
+  if (titleTokens.length > 0) {
+    conditions.push(`(${titleTokens.map(() => 'normalize_text(w.title) LIKE ?').join(' OR ')})`);
+    for (const t of titleTokens) {
+      scoreParts.push(`(CASE WHEN normalize_text(w.title) LIKE ? THEN 1 ELSE 0 END)`);
+      params.push(`%${t}%`);
+    }
+    for (const t of titleTokens) {
+      params.push(`%${t}%`);
+    }
   }
-  if (composer) {
-    conditions.push('c.name LIKE ?');
-    params.push(`%${composer}%`);
+
+  const composerTokens = composer ? tokenizeQuery(composer) : [];
+  if (composerTokens.length > 0) {
+    conditions.push(`(${composerTokens.map(() => 'normalize_text(c.name) LIKE ?').join(' OR ')})`);
+    for (const t of composerTokens) {
+      scoreParts.push(`(CASE WHEN normalize_text(c.name) LIKE ? THEN 1 ELSE 0 END)`);
+      params.push(`%${t}%`);
+    }
+    for (const t of composerTokens) {
+      params.push(`%${t}%`);
+    }
   }
+
   if (period) {
     conditions.push('c.FK_period = ?');
     params.push(period);
@@ -191,17 +248,19 @@ export function searchWorksMeta({ title, composer, period, instrument, type, lim
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const scoreSql = scoreParts.length > 0 ? scoreParts.join(' + ') : '0';
 
   const sql = `
     SELECT w.title, c.name AS composerName, t.type, w.Mode, w.Tone,
       w.piano, w.violin, w.flute, w.clarinet, w.oboe,
       w.trumpet, w.horn, w.cello, w.viola, w.guitar,
-      w.contrabass, w.string, w.wind, w.organ
+      w.contrabass, w.string, w.wind, w.organ,
+      (${scoreSql}) AS relevanceScore
     FROM works AS w
     LEFT JOIN composers AS c ON w.FK_composer = c.PK_composer
     LEFT JOIN Types AS t ON w.FK_Type = t.PK_type
     ${whereClause}
-    ORDER BY w.PK_work DESC
+    ORDER BY relevanceScore DESC, LENGTH(w.title) ASC, w.PK_work DESC
     LIMIT ?
   `;
   params.push(limit);

@@ -13,6 +13,8 @@ import {
   getComposerTypeDistributionForChart,
   getComposerInstrumentDistributionForChart,
   getWorksMetadataBatch,
+  tokenizeQuery,
+  normalizeText,
 } from '../services/imslpMetadataService.js';
 import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
@@ -37,10 +39,30 @@ function validateImslpUrl(rawUrl) {
   }
 }
 
+function isRelevantToQuery(item, titleQuery, composerQuery) {
+  const workTitle = normalizeText(item.intvals?.worktitle || item.id || '');
+  const itemComposer = normalizeText(item.intvals?.composer || '');
+
+  if (composerQuery) {
+    const tokens = tokenizeQuery(composerQuery);
+    if (tokens.length > 0 && !tokens.some((t) => itemComposer.includes(t))) {
+      return false;
+    }
+  }
+
+  if (titleQuery) {
+    const tokens = tokenizeQuery(titleQuery);
+    if (tokens.length > 0 && !tokens.some((t) => workTitle.includes(t))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 router.get('/imslp/works', async (req, res, next) => {
   try {
     const { title, composer, period, instrument, type } = req.query;
-    const hasFilters = title || composer || period || instrument || type;
 
     // 1. Always query metadata DB first (default list or filtered search)
     const metaItems = searchWorksMeta({
@@ -52,9 +74,9 @@ router.get('/imslp/works', async (req, res, next) => {
       limit: 50,
     });
 
-    // 2. If metadata results are abundant, return them directly
-    //    Otherwise fall back to existing IMSLP proxy + Bing for broader coverage
-    let merged = metaItems;
+    // 2. If metadata results are abundant, return them directly.
+    //    If sparse, fall back to IMSLP proxy + Bing, but filter out irrelevant items.
+    let merged = [...metaItems];
     if (metaItems.length < 10) {
       const bingQuery = [composer, title].filter(Boolean).join(' ');
       let bingPromise;
@@ -75,7 +97,7 @@ router.get('/imslp/works', async (req, res, next) => {
       const seen = new Set(metaItems.map((i) => i.permlink));
 
       for (const item of localData?.items || []) {
-        if (item.permlink && !seen.has(item.permlink)) {
+        if (item.permlink && !seen.has(item.permlink) && isRelevantToQuery(item, title, composer)) {
           seen.add(item.permlink);
           const metadata = getWorkMetadata(item.id);
           if (metadata) {
@@ -86,7 +108,7 @@ router.get('/imslp/works', async (req, res, next) => {
       }
 
       for (const item of bingData?.items || []) {
-        if (item.permlink && !seen.has(item.permlink)) {
+        if (item.permlink && !seen.has(item.permlink) && isRelevantToQuery(item, title, composer)) {
           seen.add(item.permlink);
           merged.push(item);
         }
