@@ -3,8 +3,16 @@ import https from 'https';
 import http from 'http';
 import path from 'path';
 import { URL } from 'url';
-import { callImslp, searchBingImslp, mergeSearchResults } from '../services/imslpService.js';
-import { getWorkMetadata, getComposerMetadata } from '../services/imslpMetadataService.js';
+import { callImslp, searchBingImslp } from '../services/imslpService.js';
+import {
+  getWorkMetadata,
+  getComposerMetadata,
+  searchWorksMeta,
+  searchComposersMeta,
+  getFilterOptions,
+  getComposerTypeDistributionForChart,
+  getComposerInstrumentDistributionForChart,
+} from '../services/imslpMetadataService.js';
 import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
 
@@ -30,30 +38,59 @@ function validateImslpUrl(rawUrl) {
 
 router.get('/imslp/works', async (req, res, next) => {
   try {
-    const { title, composer } = req.query;
+    const { title, composer, period, instrument, type } = req.query;
+    const hasFilters = title || composer || period || instrument || type;
 
-    // Build Bing query string
-    const bingQuery = [composer, title].filter(Boolean).join(' ');
+    // 1. Always query metadata DB first (default list or filtered search)
+    const metaItems = searchWorksMeta({
+      title: title || undefined,
+      composer: composer || undefined,
+      period: period || undefined,
+      instrument: instrument || undefined,
+      type: type || undefined,
+      limit: 50,
+    });
 
-    let bingPromise;
-    if (BING_SEARCH_KEY && bingQuery) {
-      bingPromise = searchBingImslp(bingQuery, 20);
-    } else {
-      bingPromise = Promise.resolve({ items: [] });
+    // 2. If metadata results are abundant, return them directly
+    //    Otherwise fall back to existing IMSLP proxy + Bing for broader coverage
+    let merged = metaItems;
+    if (metaItems.length < 10) {
+      const bingQuery = [composer, title].filter(Boolean).join(' ');
+      let bingPromise;
+      if (BING_SEARCH_KEY && bingQuery) {
+        bingPromise = searchBingImslp(bingQuery, 20);
+      } else {
+        bingPromise = Promise.resolve({ items: [] });
+      }
+
+      const [localData, bingData] = await Promise.all([
+        callImslp('search_works', {
+          title: title || undefined,
+          composer: composer || undefined,
+        }),
+        bingPromise,
+      ]);
+
+      const seen = new Set(metaItems.map((i) => i.permlink));
+
+      for (const item of localData?.items || []) {
+        if (item.permlink && !seen.has(item.permlink)) {
+          seen.add(item.permlink);
+          const metadata = getWorkMetadata(item.id);
+          if (metadata) {
+            item.metadata = metadata;
+          }
+          merged.push(item);
+        }
+      }
+
+      for (const item of bingData?.items || []) {
+        if (item.permlink && !seen.has(item.permlink)) {
+          seen.add(item.permlink);
+          merged.push(item);
+        }
+      }
     }
-
-    const [localData, bingData] = await Promise.all([
-      callImslp('search_works', {
-        title: title || undefined,
-        composer: composer || undefined,
-      }),
-      bingPromise,
-    ]);
-
-    const merged = mergeSearchResults(
-      localData?.items || [],
-      bingData?.items || []
-    );
 
     res.json({ items: merged });
   } catch (err) {
@@ -63,26 +100,50 @@ router.get('/imslp/works', async (req, res, next) => {
 
 router.get('/imslp/people', async (req, res, next) => {
   try {
-    const { name } = req.query;
+    const { name, period, instrument, type } = req.query;
 
-    let bingPromise;
-    if (BING_SEARCH_KEY && name) {
-      bingPromise = searchBingImslp(name, 20);
-    } else {
-      bingPromise = Promise.resolve({ items: [] });
+    // 1. Query metadata DB first
+    const metaItems = searchComposersMeta({
+      name: name || undefined,
+      period: period || undefined,
+      instrument: instrument || undefined,
+      type: type || undefined,
+      limit: 50,
+    });
+
+    // 2. Fall back to existing search if metadata results are sparse
+    let merged = metaItems;
+    if (metaItems.length < 10) {
+      let bingPromise;
+      if (BING_SEARCH_KEY && name) {
+        bingPromise = searchBingImslp(name, 20);
+      } else {
+        bingPromise = Promise.resolve({ items: [] });
+      }
+
+      const [localData, bingData] = await Promise.all([
+        callImslp('search_people', {
+          name: name || undefined,
+        }),
+        bingPromise,
+      ]);
+
+      const seen = new Set(metaItems.map((i) => i.permlink));
+
+      for (const item of localData?.items || []) {
+        if (item.permlink && !seen.has(item.permlink)) {
+          seen.add(item.permlink);
+          merged.push(item);
+        }
+      }
+
+      for (const item of bingData?.items || []) {
+        if (item.permlink && !seen.has(item.permlink)) {
+          seen.add(item.permlink);
+          merged.push(item);
+        }
+      }
     }
-
-    const [localData, bingData] = await Promise.all([
-      callImslp('search_people', {
-        name: name || undefined,
-      }),
-      bingPromise,
-    ]);
-
-    const merged = mergeSearchResults(
-      localData?.items || [],
-      bingData?.items || []
-    );
 
     res.json({ items: merged });
   } catch (err) {
@@ -113,15 +174,36 @@ router.get('/imslp/people/:permlink', async (req, res, next) => {
     if (!permlink || permlink.length > 512) {
       throw new HttpError(400, 'Invalid permlink');
     }
-    const data = await callImslp('person_detail', { permlink });
-    const metadata = getComposerMetadata(data?.name);
+    const name = permlink.replace(/_/g, ' ');
+    const metadata = getComposerMetadata(name);
+    const data = { permlink, name };
     if (metadata) {
       data.metadata = metadata;
+      data.metadata.typeDistributionChartData = getComposerTypeDistributionForChart(name);
+      data.metadata.instrumentDistributionChartData = getComposerInstrumentDistributionForChart(name);
     }
     res.json(data);
   } catch (err) {
     next(err);
   }
+});
+
+router.get('/imslp/people/:permlink/works', async (req, res, next) => {
+  try {
+    const { permlink } = req.params;
+    if (!permlink || permlink.length > 512) {
+      throw new HttpError(400, 'Invalid permlink');
+    }
+    const data = await callImslp('person_detail', { permlink });
+    res.json({ categoryTables: data?.categoryTables || {} });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/imslp/filters', (req, res) => {
+  const options = getFilterOptions();
+  res.json(options || { periods: [], instruments: [], types: [] });
 });
 
 router.get('/imslp/download', async (req, res, next) => {

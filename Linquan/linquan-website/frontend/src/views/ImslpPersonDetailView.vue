@@ -2,7 +2,7 @@
   <section class="card panel">
     <router-link class="back" to="/imslp">← {{ t('imslp.backToSearch') }}</router-link>
 
-    <div v-if="loading" class="subtle">{{ t('common.loading') }}</div>
+    <div v-if="loadingMeta" class="subtle">{{ t('common.loading') }}</div>
     <div v-else-if="error" class="subtle warn">{{ error }}</div>
     <div v-else>
       <h2 class="section-title">
@@ -40,42 +40,91 @@
         </div>
       </div>
 
-      <div v-for="(rows, subcategory) in detail.categoryTables" :key="subcategory" class="category-block">
-        <h3 class="subsection-title">{{ subcategory }}</h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th v-for="(header, idx) in tableHeaders(rows)" :key="idx">{{ header }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, ridx) in rows" :key="ridx">
-                <td v-for="(header, hidx) in tableHeaders(rows)" :key="hidx">
-                  <router-link
-                    v-if="getLink(row, header)"
-                    :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
-                    class="work-link"
-                  >
-                    {{ row[header] || '' }}
-                  </router-link>
-                  <span v-else>{{ row[header] || '' }}</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+      <div v-if="typeChartData" class="chart-section">
+        <h3 class="subsection-title">{{ t('imslp.typeDistributionChart') }}</h3>
+        <div class="chart-wrapper">
+          <svg viewBox="-1.1 -1.1 2.2 2.2" class="pie-chart">
+            <path
+              v-for="(slice, idx) in typeChartData.slices"
+              :key="idx"
+              :d="slice.path"
+              :fill="slice.color"
+              stroke="var(--panel-soft)"
+              stroke-width="0.02"
+            />
+          </svg>
+          <ul class="chart-legend">
+            <li v-for="(slice, idx) in typeChartData.slices" :key="idx">
+              <span class="legend-dot" :style="{ background: slice.color }"></span>
+              <span class="legend-label">{{ slice.label }}</span>
+              <span class="legend-value">{{ slice.value }} ({{ slice.percentage }}%)</span>
+            </li>
+          </ul>
         </div>
       </div>
 
-      <p v-if="Object.keys(detail.categoryTables || {}).length === 0" class="subtle">
-        {{ t('imslp.noCategoryTables') }}
-      </p>
+      <div v-if="instrumentChartData" class="chart-section">
+        <h3 class="subsection-title">{{ t('imslp.instrumentDistributionChart') }}</h3>
+        <div class="chart-wrapper">
+          <svg viewBox="-1.1 -1.1 2.2 2.2" class="pie-chart">
+            <path
+              v-for="(slice, idx) in instrumentChartData.slices"
+              :key="idx"
+              :d="slice.path"
+              :fill="slice.color"
+              stroke="var(--panel-soft)"
+              stroke-width="0.02"
+            />
+          </svg>
+          <ul class="chart-legend">
+            <li v-for="(slice, idx) in instrumentChartData.slices" :key="idx">
+              <span class="legend-dot" :style="{ background: slice.color }"></span>
+              <span class="legend-label">{{ slice.label }}</span>
+              <span class="legend-value">{{ slice.value }} ({{ slice.percentage }}%)</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div v-if="loadingWorks" class="subtle">{{ t('imslp.loadingWorks') }}</div>
+      <div v-else>
+        <div v-for="(rows, subcategory) in categoryTables" :key="subcategory" class="category-block">
+          <h3 class="subsection-title">{{ subcategory }}</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th v-for="(header, idx) in tableHeaders(rows)" :key="idx">{{ header }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, ridx) in rows" :key="ridx">
+                  <td v-for="(header, hidx) in tableHeaders(rows)" :key="hidx">
+                    <router-link
+                      v-if="getLink(row, header)"
+                      :to="{ name: 'imslpWorkDetail', params: { permlink: getLink(row, header) } }"
+                      class="work-link"
+                    >
+                      {{ row[header] || '' }}
+                    </router-link>
+                    <span v-else>{{ row[header] || '' }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <p v-if="Object.keys(categoryTables || {}).length === 0" class="subtle">
+          {{ t('imslp.noCategoryTables') }}
+        </p>
+      </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
@@ -86,8 +135,10 @@ const { t } = useI18n();
 const { showError } = useToast();
 
 const permlink = route.params.permlink;
-const detail = ref({ categoryTables: {} });
-const loading = ref(true);
+const detail = ref({});
+const categoryTables = ref({});
+const loadingMeta = ref(true);
+const loadingWorks = ref(true);
 const error = ref('');
 
 function tableHeaders(rows) {
@@ -109,16 +160,69 @@ function periodLabel(period) {
   return map[period] || period;
 }
 
+function buildPieChart(chart) {
+  if (!chart || !chart.values?.length) return null;
+  const total = chart.values.reduce((a, b) => a + b, 0);
+  let currentAngle = -Math.PI / 2;
+  const slices = chart.labels.map((label, i) => {
+    const value = chart.values[i];
+    const angle = (value / total) * 2 * Math.PI;
+    const startAngle = currentAngle;
+    const endAngle = currentAngle + angle;
+    const x1 = Math.cos(startAngle);
+    const y1 = Math.sin(startAngle);
+    const x2 = Math.cos(endAngle);
+    const y2 = Math.sin(endAngle);
+    const largeArc = angle > Math.PI ? 1 : 0;
+    const path = `M 0 0 L ${x1} ${y1} A 1 1 0 ${largeArc} 1 ${x2} ${y2} Z`;
+    currentAngle = endAngle;
+    return {
+      label,
+      value,
+      color: chart.colors[i],
+      percentage: ((value / total) * 100).toFixed(1),
+      path,
+    };
+  });
+  return { slices, total };
+}
+
+const typeChartData = computed(() =>
+  buildPieChart(detail.value.metadata?.typeDistributionChartData)
+);
+
+const instrumentChartData = computed(() =>
+  buildPieChart(detail.value.metadata?.instrumentDistributionChartData)
+);
+
 onMounted(async () => {
-  try {
-    const { data } = await api.get(`/imslp/people/${encodeURIComponent(permlink)}`);
-    detail.value = data;
-  } catch (err) {
-    error.value = err?.response?.data?.message || t('imslp.loadDetailFailed');
-    showError(err, t('imslp.loadDetailFailed'));
-  } finally {
-    loading.value = false;
-  }
+  // 1. Load metadata immediately (from local DB)
+  const metaPromise = api.get(`/imslp/people/${encodeURIComponent(permlink)}`).then(
+    ({ data }) => {
+      detail.value = data;
+    },
+    (err) => {
+      error.value = err?.response?.data?.message || t('imslp.loadDetailFailed');
+      showError(err, t('imslp.loadDetailFailed'));
+    }
+  ).finally(() => {
+    loadingMeta.value = false;
+  });
+
+  // 2. Load works list from IMSLP (slower)
+  const worksPromise = api.get(`/imslp/people/${encodeURIComponent(permlink)}/works`).then(
+    ({ data }) => {
+      categoryTables.value = data.categoryTables || {};
+    },
+    () => {
+      // Works load failure is non-fatal; just show empty tables
+      categoryTables.value = {};
+    }
+  ).finally(() => {
+    loadingWorks.value = false;
+  });
+
+  await Promise.all([metaPromise, worksPromise]);
 });
 </script>
 
@@ -248,5 +352,83 @@ tr:last-child td {
   background: rgba(var(--success-rgb), 0.08);
   border-color: rgba(var(--success-rgb), 0.2);
   color: var(--success);
+}
+
+.chart-section {
+  margin: 1.2rem 0;
+}
+
+.chart-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  align-items: flex-start;
+}
+
+.pie-chart {
+  width: 200px;
+  height: 200px;
+  flex-shrink: 0;
+}
+
+.chart-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 160px;
+}
+
+.chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  break-inside: avoid;
+}
+
+@media (min-width: 641px) {
+  .chart-legend {
+    flex-direction: row;
+    flex-wrap: wrap;
+    column-count: 2;
+    display: block;
+  }
+
+  .chart-legend li {
+    width: 100%;
+    margin-bottom: 0.4rem;
+  }
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legend-value {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .chart-wrapper {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .chart-legend {
+    width: 100%;
+  }
 }
 </style>

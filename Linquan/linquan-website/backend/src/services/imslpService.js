@@ -167,7 +167,7 @@ export function mergeSearchResults(localItems = [], bingItems = []) {
   const seen = new Set();
   const merged = [];
 
-  // Prefer local results first (richer metadata)
+  // Prefer local results first 
   for (const item of localItems) {
     const p = item.permlink;
     if (p && !seen.has(p)) {

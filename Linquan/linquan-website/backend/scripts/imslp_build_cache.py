@@ -13,7 +13,6 @@ import imslp.interfaces.internal as internal
 CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', 'cache')
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-
 def save_json(path, records):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump([dict(r) for r in records], f, ensure_ascii=False)

@@ -60,6 +60,7 @@ pnpm-debug.log*
 
 # vim cache
 *~
+*.swp
 
 # python cache
 __pycache__

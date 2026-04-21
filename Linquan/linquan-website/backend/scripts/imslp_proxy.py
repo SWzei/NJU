@@ -396,6 +396,9 @@ def _fetch_category_members(client, category_name, subcategory=None):
         return []
 
 
+_COMPOSER_PATTERN = re.compile(r'\s*\([^)]+\)$')
+
+
 def _enrich_table_with_links(table, client, category_name, subcategory=None):
     """为 fetch_category_table 返回的表格中的 Title 列补充 permlink 链接。"""
     if not table:
@@ -415,7 +418,7 @@ def _enrich_table_with_links(table, client, category_name, subcategory=None):
             permlink = title.replace(" ", "_")
             member_map[title.lower()] = permlink
             # 也建立去掉作曲家后缀后的映射
-            composer_match = re.search(r'\s*\([^)]+\)$', title)
+            composer_match = _COMPOSER_PATTERN.search(title)
             if composer_match:
                 work_title = title[:composer_match.start()].strip()
                 member_map[work_title.lower()] = permlink
@@ -431,7 +434,7 @@ def _enrich_table_with_links(table, client, category_name, subcategory=None):
 
         # 如果没有直接匹配，尝试从标题中去掉作曲家后缀再匹配
         if not permlink:
-            composer_match = re.search(r'\s*\([^)]+\)$', title)
+            composer_match = _COMPOSER_PATTERN.search(title)
             if composer_match:
                 work_title = title[:composer_match.start()].strip()
                 permlink = member_map.get(work_title.lower())
