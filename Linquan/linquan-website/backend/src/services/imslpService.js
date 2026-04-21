@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import https from 'https';
 import path from 'path';
@@ -15,40 +15,68 @@ const BING_API_HOST = 'api.bing.microsoft.com';
 const BING_API_PATH = '/v7.0/search';
 
 export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const input = JSON.stringify({ action, args });
-  const result = spawnSync(PYTHON_CMD, [PROXY_SCRIPT], {
-    input,
-    encoding: 'utf-8',
-    timeout: timeoutMs,
-    maxBuffer: 50 * 1024 * 1024, // 50 MB
+  return new Promise((resolve, reject) => {
+    const input = JSON.stringify({ action, args });
+    const child = spawn(PYTHON_CMD, [PROXY_SCRIPT], {
+      timeout: timeoutMs,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdin.write(input);
+    child.stdin.end();
+
+    child.stdout.setEncoding('utf-8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+
+    child.stderr.setEncoding('utf-8');
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new HttpError(504, 'IMSLP request timed out. Please try again.'));
+    }, timeoutMs);
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (err.code === 'ETIMEDOUT' || err.code === 'ENOBUFS') {
+        reject(new HttpError(504, 'IMSLP request timed out. Please try again.'));
+      } else {
+        reject(new HttpError(502, `IMSLP proxy failed: ${err.message}`));
+      }
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        const detail = stderr.trim() || `Process exited with code ${code}`;
+        reject(new HttpError(502, `IMSLP proxy failed: ${detail}`));
+        return;
+      }
+
+      const trimmed = stdout.trim();
+      if (!trimmed) {
+        reject(new HttpError(502, 'IMSLP proxy returned empty output'));
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed.ok) {
+          reject(new HttpError(502, parsed.error || 'IMSLP proxy returned an error'));
+        } else {
+          resolve(parsed.data);
+        }
+      } catch (err) {
+        reject(new HttpError(502, `Invalid response from IMSLP proxy: ${err.message}`));
+      }
+    });
   });
-
-  if (result.error) {
-    if (result.error.code === 'ETIMEDOUT' || result.error.code === 'ENOBUFS') {
-      throw new HttpError(504, 'IMSLP request timed out. Please try again.');
-    }
-    throw new HttpError(502, `IMSLP proxy failed: ${result.error.message}`);
-  }
-
-  if (result.status !== 0) {
-    const detail = result.stderr?.trim() || `Process exited with code ${result.status}`;
-    throw new HttpError(502, `IMSLP proxy failed: ${detail}`);
-  }
-
-  const stdout = result.stdout?.trim();
-  if (!stdout) {
-    throw new HttpError(502, 'IMSLP proxy returned empty output');
-  }
-
-  try {
-    const parsed = JSON.parse(stdout);
-    if (!parsed.ok) {
-      throw new HttpError(502, parsed.error || 'IMSLP proxy returned an error');
-    }
-    return parsed.data;
-  } catch (err) {
-    throw new HttpError(502, `Invalid response from IMSLP proxy: ${err.message}`);
-  }
 }
 
 // ---------------------------------------------------------------------------

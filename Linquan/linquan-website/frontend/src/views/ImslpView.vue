@@ -132,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
@@ -153,6 +153,17 @@ const loading = ref(false);
 const searched = ref(false);
 const error = ref('');
 const filterOptions = ref({ periods: [], instruments: [], types: [] });
+
+let searchController = new AbortController();
+
+function cancelPendingSearch() {
+  searchController.abort();
+  searchController = new AbortController();
+}
+
+function isCanceled(err) {
+  return err.code === 'ERR_CANCELED' || err.name === 'CanceledError';
+}
 
 function displayTitle(item) {
   if (activeTab.value === 'works') {
@@ -182,6 +193,7 @@ function switchTab(tab) {
   activeTab.value = tab;
   searched.value = false;
   results.value = [];
+  cancelPendingSearch();
   if (tab === 'works') {
     searchWorks();
   } else {
@@ -199,12 +211,14 @@ async function loadFilters() {
 }
 
 async function searchWorks() {
+  cancelPendingSearch();
   loading.value = true;
   searched.value = true;
   error.value = '';
   results.value = [];
   try {
     const { data } = await api.get('/imslp/works', {
+      signal: searchController.signal,
       params: {
         title: workTitle.value || undefined,
         composer: composer.value || undefined,
@@ -215,6 +229,7 @@ async function searchWorks() {
     });
     results.value = data.items || [];
   } catch (err) {
+    if (isCanceled(err)) return;
     error.value = err?.response?.data?.message || t('imslp.searchFailed');
     showError(err, t('imslp.searchFailed'));
   } finally {
@@ -223,12 +238,14 @@ async function searchWorks() {
 }
 
 async function searchPeople() {
+  cancelPendingSearch();
   loading.value = true;
   searched.value = true;
   error.value = '';
   results.value = [];
   try {
     const { data } = await api.get('/imslp/people', {
+      signal: searchController.signal,
       params: {
         name: personName.value || undefined,
         period: filterPeriod.value || undefined,
@@ -238,6 +255,7 @@ async function searchPeople() {
     });
     results.value = data.items || [];
   } catch (err) {
+    if (isCanceled(err)) return;
     error.value = err?.response?.data?.message || t('imslp.searchFailed');
     showError(err, t('imslp.searchFailed'));
   } finally {
@@ -248,6 +266,10 @@ async function searchPeople() {
 onMounted(() => {
   loadFilters();
   searchWorks();
+});
+
+onBeforeUnmount(() => {
+  cancelPendingSearch();
 });
 </script>
 

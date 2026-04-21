@@ -159,7 +159,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
@@ -244,32 +244,48 @@ const instrumentChartData = computed(() =>
   buildPieChart(detail.value.metadata?.instrumentDistributionChartData)
 );
 
+let controller = new AbortController();
+
+onBeforeUnmount(() => {
+  controller.abort();
+});
+
 onMounted(async () => {
+  controller = new AbortController();
+
   // 1. Load metadata immediately (from local DB)
-  const metaPromise = api.get(`/imslp/people/${encodeURIComponent(permlink)}`).then(
-    ({ data }) => {
-      detail.value = data;
-    },
-    (err) => {
-      error.value = err?.response?.data?.message || t('imslp.loadDetailFailed');
-      showError(err, t('imslp.loadDetailFailed'));
-    }
-  ).finally(() => {
-    loadingMeta.value = false;
-  });
+  const metaPromise = api
+    .get(`/imslp/people/${encodeURIComponent(permlink)}`, { signal: controller.signal })
+    .then(
+      ({ data }) => {
+        detail.value = data;
+      },
+      (err) => {
+        if (err.code === 'ERR_CANCELED') return;
+        error.value = err?.response?.data?.message || t('imslp.loadDetailFailed');
+        showError(err, t('imslp.loadDetailFailed'));
+      }
+    )
+    .finally(() => {
+      loadingMeta.value = false;
+    });
 
   // 2. Load works list from IMSLP (slower)
-  const worksPromise = api.get(`/imslp/people/${encodeURIComponent(permlink)}/works`).then(
-    ({ data }) => {
-      groupedTables.value = data.groupedTables || {};
-    },
-    () => {
-      // Works load failure is non-fatal; just show empty tables
-      groupedTables.value = {};
-    }
-  ).finally(() => {
-    loadingWorks.value = false;
-  });
+  const worksPromise = api
+    .get(`/imslp/people/${encodeURIComponent(permlink)}/works`, { signal: controller.signal })
+    .then(
+      ({ data }) => {
+        groupedTables.value = data.groupedTables || {};
+      },
+      (err) => {
+        if (err.code === 'ERR_CANCELED') return;
+        // Works load failure is non-fatal; just show empty tables
+        groupedTables.value = {};
+      }
+    )
+    .finally(() => {
+      loadingWorks.value = false;
+    });
 
   await Promise.all([metaPromise, worksPromise]);
 });
