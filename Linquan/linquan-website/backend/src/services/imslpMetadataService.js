@@ -244,7 +244,8 @@ export function searchWorksMeta({ title, composer, period, instrument, type, lim
     params.push(type);
   }
   if (instrument && INSTRUMENT_COLUMNS.includes(instrument)) {
-    conditions.push(`w.${instrument} > 0`);
+    conditions.push(`(w.${instrument} > 0 OR w.${instrument} IS NULL)`);
+    scoreParts.push(`(CASE WHEN w.${instrument} > 0 THEN 1 ELSE 0 END)`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -260,7 +261,7 @@ export function searchWorksMeta({ title, composer, period, instrument, type, lim
     LEFT JOIN composers AS c ON w.FK_composer = c.PK_composer
     LEFT JOIN Types AS t ON w.FK_Type = t.PK_type
     ${whereClause}
-    ORDER BY relevanceScore DESC, LENGTH(w.title) ASC, w.PK_work DESC
+    ORDER BY relevanceScore DESC, ${titleTokens.length > 0 ? 'LENGTH(w.title) ASC, w.PK_work DESC' : 'w.PK_work DESC'}
     LIMIT ?
   `;
   params.push(limit);
