@@ -11,10 +11,48 @@ const PROXY_SCRIPT = path.resolve(__dirname, '../../scripts/imslp_proxy.py');
 const PYTHON_CMD = process.env.PYTHON_PATH || 'python3';
 const DEFAULT_TIMEOUT_MS = 60000;
 
+// ---------------------------------------------------------------------------
+// In-memory cache for IMSLP person_detail
+// ---------------------------------------------------------------------------
+const _personDetailCache = new Map();
+const PERSON_DETAIL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_PERSON_DETAIL_CACHE_SIZE = 200;
+
+function _makeCacheKey(action, args) {
+  return JSON.stringify({ action, args });
+}
+
+function _getCachedPersonDetail(key) {
+  const entry = _personDetailCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.time > PERSON_DETAIL_CACHE_TTL_MS) {
+    _personDetailCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function _setCachedPersonDetail(key, data) {
+  if (_personDetailCache.size >= MAX_PERSON_DETAIL_CACHE_SIZE) {
+    const firstKey = _personDetailCache.keys().next().value;
+    _personDetailCache.delete(firstKey);
+  }
+  _personDetailCache.set(key, { data, time: Date.now() });
+}
+
 const BING_API_HOST = 'api.bing.microsoft.com';
 const BING_API_PATH = '/v7.0/search';
 
 export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  // Check in-memory cache for person_detail
+  if (action === 'person_detail') {
+    const cacheKey = _makeCacheKey(action, args);
+    const cached = _getCachedPersonDetail(cacheKey);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const input = JSON.stringify({ action, args });
     const child = spawn(PYTHON_CMD, [PROXY_SCRIPT], {
@@ -70,6 +108,11 @@ export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
         if (!parsed.ok) {
           reject(new HttpError(502, parsed.error || 'IMSLP proxy returned an error'));
         } else {
+          // Cache successful person_detail responses
+          if (action === 'person_detail') {
+            const cacheKey = _makeCacheKey(action, args);
+            _setCachedPersonDetail(cacheKey, parsed.data);
+          }
           resolve(parsed.data);
         }
       } catch (err) {

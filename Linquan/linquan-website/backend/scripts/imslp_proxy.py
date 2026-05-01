@@ -5,6 +5,7 @@ Runs as a long-lived process. Reads line-delimited JSON requests from stdin
 and writes line-delimited JSON responses to stdout.
 """
 
+import concurrent.futures
 import json
 import os
 import re
@@ -751,34 +752,43 @@ def _enrich_table_with_links(table, client, category_name, subcategory=None):
     return table
 
 
+_PERSON_DETAIL_MW_SUBCATEGORIES = {"Collections", "Collaborations", "Books", "Pasticcios"}
+
+
+def _fetch_person_subcategory(subcategory: str, client, category_name: str):
+    """Fetch items for a single subcategory (thread-safe for parallel use)."""
+    try:
+        if subcategory == "Compositions":
+            items = _fetch_category_members_all(client, category_name)
+        elif subcategory in _PERSON_DETAIL_MW_SUBCATEGORIES:
+            items = _fetch_category_members_all(client, category_name, subcategory)
+        else:
+            items = _fetch_subcategory_from_wiki(category_name, subcategory)
+            if not items:
+                items = _fetch_category_members_all(client, category_name, subcategory)
+        return subcategory, items
+    except Exception as e:
+        print(f"Error fetching {subcategory}: {e}", file=sys.stderr)
+        return subcategory, []
+
+
 def action_person_detail(args: dict):
     permlink = _extract_page_title(args["permlink"])
     category_name = permlink.replace("_", " ")
-    tables = {}
     client = imslp.interfaces.mw_api.ImslpMwClient()
+    tables = {}
 
-    # Subcategories that exist as real MediaWiki sub-categories
-    _MW_SUBCATEGORIES = {"Collections", "Collaborations", "Books", "Pasticcios"}
-
-    for subcategory in imslp.interfaces.constants.IMSLP_SUBCATEGORIES:
-        items = []
-
-        if subcategory == "Compositions":
-            # Compositions = all members of the main category (mwclient handles pagination)
-            items = _fetch_category_members_all(client, category_name)
-        elif subcategory in _MW_SUBCATEGORIES:
-            # These have real MediaWiki sub-categories
-            items = _fetch_category_members_all(client, category_name, subcategory)
-        else:
-            # As Arranger / As Copyist / As Dedicatee / As Editor
-            # These do NOT have MediaWiki sub-categories; scrape the wiki page instead.
-            items = _fetch_subcategory_from_wiki(category_name, subcategory)
-            # Fallback: try MediaWiki sub-category just in case IMSLP adds it later
-            if not items:
-                items = _fetch_category_members_all(client, category_name, subcategory)
-
-        if items:
-            tables[subcategory] = items
+    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
+        futures = {
+            executor.submit(
+                _fetch_person_subcategory, subcategory, client, category_name
+            ): subcategory
+            for subcategory in imslp.interfaces.constants.IMSLP_SUBCATEGORIES
+        }
+        for future in concurrent.futures.as_completed(futures):
+            subcategory, items = future.result()
+            if items:
+                tables[subcategory] = items
 
     return {
         "permlink": permlink,
