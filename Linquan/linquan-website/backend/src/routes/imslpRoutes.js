@@ -181,7 +181,13 @@ router.get('/imslp/works/:permlink', async (req, res, next) => {
       throw new HttpError(400, 'Invalid permlink');
     }
     const data = await callImslp('work_detail', { permlink });
+    // Preserve page-scraped metadata under a separate key so it doesn't
+    // clash with the local SQLite metadata.
+    if (data?.metadata) {
+      data.pageMetadata = data.metadata;
+    }
     const metadata = getWorkMetadata(data?.title);
+
     if (metadata) {
       data.metadata = metadata;
     }

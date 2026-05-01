@@ -8,8 +8,8 @@
       <h2 class="section-title">{{ detail.title }}</h2>
       <p class="subtle">{{ detail.permlink }}</p>
 
-      <div v-if="detail.metadata" class="metadata-panel">
-        <div class="meta-row">
+      <div v-if="detail.metadata || detail.pageMetadata" class="metadata-panel">
+        <div v-if="detail.metadata" class="meta-row">
           <span v-if="detail.metadata.type" class="meta-tag type" :style="tagStyle(detail.metadata.type)">{{ translateImslpLabel('types', detail.metadata.type) }}</span>
           <span v-if="detail.metadata.tone && detail.metadata.mode" class="meta-tag key">
             {{ translateImslpLabel('tones', detail.metadata.tone) }} {{ translateImslpLabel('modes', detail.metadata.mode) }}
@@ -22,6 +22,49 @@
           >
             {{ translateImslpLabel('instruments', instr) }}
           </span>
+        </div>
+
+        <div v-if="detail.pageMetadata" class="work-info">
+          <div v-if="detail.pageMetadata.composition_date" class="info-row">
+            <span class="info-label">{{ t('imslp.compositionDate') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.composition_date }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.opus" class="info-row">
+            <span class="info-label">{{ t('imslp.opus') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.opus }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.key" class="info-row">
+            <span class="info-label">{{ t('imslp.key') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.key }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.piece_style" class="info-row">
+            <span class="info-label">{{ t('imslp.pieceStyle') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.piece_style }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.instrumentation" class="info-row">
+            <span class="info-label">{{ t('imslp.instrumentation') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.instrumentation }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.movements" class="info-row">
+            <span class="info-label">{{ t('imslp.movements') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.movements }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.first_publication" class="info-row">
+            <span class="info-label">{{ t('imslp.firstPublication') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.first_publication }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.first_performance" class="info-row">
+            <span class="info-label">{{ t('imslp.firstPerformance') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.first_performance }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.dedication" class="info-row">
+            <span class="info-label">{{ t('imslp.dedication') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.dedication }}</span>
+          </div>
+          <div v-if="detail.pageMetadata.avg_duration" class="info-row">
+            <span class="info-label">{{ t('imslp.avgDuration') }}:</span>
+            <span class="info-value">{{ detail.pageMetadata.avg_duration }}</span>
+          </div>
         </div>
       </div>
 
@@ -205,6 +248,33 @@ onMounted(async () => {
   background: rgba(var(--success-rgb), 0.08);
   border-color: rgba(var(--success-rgb), 0.25);
   color: var(--success);
+}
+
+.work-info {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.info-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.5rem;
+}
+
+.info-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  min-width: 5.5rem;
+  flex-shrink: 0;
+}
+
+.info-value {
+  font-size: 0.9rem;
+  color: var(--ink);
 }
 
 .inline-tag {

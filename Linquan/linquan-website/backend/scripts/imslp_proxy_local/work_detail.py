@@ -12,17 +12,54 @@ from .constants import IMSLP_WIKI_PREFIX
 from .utils import extract_page_title, extract_instruments_from_file_title
 
 
-def _fetch_images_metadata_fast(page):
-    """
-    Optimized version of fetch_images_metadata.
-    Pre-builds lookup tables from the HTML DOM so each image lookup is O(1)
-    instead of O(n) BeautifulSoup scans.
+def _extract_work_metadata(soup):
+    """Extract work metadata from the IMSLP infobox table in the page HTML."""
+    metadata = {}
+    for table in soup.find_all("table"):
+        for tr in table.find_all("tr"):
+            tds = tr.find_all(["td", "th"])
+            if len(tds) < 2:
+                continue
+            label = tds[0].get_text(strip=True)
+            value = tds[1].get_text(strip=True)
+            if not value:
+                continue
+            if "Year/Date of Composition" in label:
+                metadata["composition_date"] = value
+            elif "Opus/Catalogue Number" in label:
+                metadata["opus"] = value
+            elif label == "Key":
+                metadata["key"] = value
+            elif "Movements/Sections" in label:
+                metadata["movements"] = value
+            elif "Piece Style" in label:
+                metadata["piece_style"] = value
+            elif label == "Instrumentation":
+                metadata["instrumentation"] = value
+            elif "First Publication" in label:
+                metadata["first_publication"] = value
+            elif "First Performance" in label:
+                metadata["first_performance"] = value
+            elif label == "Dedication":
+                metadata["dedication"] = value
+            elif "Composer Time Period" in label:
+                metadata["composer_period"] = value
+            elif "Average Duration" in label:
+                metadata["avg_duration"] = value
+            elif label == "Work Title":
+                metadata["work_title"] = value
+        break
+    return metadata
 
+
+def _fetch_work_detail_data(page):
+    """
+    Fetch both image metadata and work metadata from the IMSLP page.
     Parallelizes the two independent network calls (HTTP HTML fetch +
     mwclient image listing) to reduce total latency.
     """
     if page is None:
-        return []
+        return {"images": [], "metadata": {}}
 
     esc_title = urllib.parse.quote(page.base_title.replace(" ", "_"))
     u = f"{IMSLP_WIKI_PREFIX}{esc_title}"
@@ -51,9 +88,12 @@ def _fetch_images_metadata_fast(page):
         all_images = images_future.result()
 
     if r is None:
-        return []
+        return {"images": [], "metadata": {}}
 
     s = bs4.BeautifulSoup(r.content, features="html.parser")
+
+    # Parse work metadata from infobox
+    metadata = _extract_work_metadata(s)
 
     # Parse ratings from embedded JavaScript
     ratings_dict = {}
@@ -148,14 +188,16 @@ def _fetch_images_metadata_fast(page):
             "sha1": f.imageinfo.get("sha1"),
         })
 
-    return images
+    return {"images": images, "metadata": metadata}
 
 
 def action_work_detail(args: dict):
     permlink = extract_page_title(args["permlink"])
     client = imslp.interfaces.mw_api.ImslpMwClient()
     page = client.pages[permlink]
-    images = _fetch_images_metadata_fast(page)
+    result = _fetch_work_detail_data(page)
+    images = result["images"]
+    metadata = result["metadata"]
     # Remove non-serializable mwclient.image.Image objects
     for img in images:
         img.pop("obj", None)
@@ -165,4 +207,5 @@ def action_work_detail(args: dict):
         "permlink": permlink,
         "title": page.base_title,
         "images": images,
+        "metadata": metadata,
     }
