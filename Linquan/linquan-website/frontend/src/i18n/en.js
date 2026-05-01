@@ -1061,5 +1061,16 @@ export default {
       hour: "hour",
       hr: "hr",
     },
+    categories: {
+      compositions: "Compositions",
+      collaborations: "Collaborations",
+      collections: "Collections",
+      "as arranger": "As Arranger",
+      "as copyist": "As Copyist",
+      "as dedicatee": "As Dedicatee",
+      "as editor": "As Editor",
+      books: "Books",
+      pasticcios: "Pasticcios",
+    },
   },
 };

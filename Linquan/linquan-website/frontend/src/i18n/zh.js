@@ -1020,5 +1020,16 @@ export default {
       hour: "小时",
       hr: "小时",
     },
+    categories: {
+      compositions: "作品",
+      collaborations: "合作作品",
+      collections: "合集",
+      "as arranger": "编曲",
+      "as copyist": "抄写员",
+      "as dedicatee": "题献对象",
+      "as editor": "编者",
+      books: "书籍",
+      pasticcios: "拼贴曲",
+    },
   },
 };

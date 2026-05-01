@@ -46,14 +46,19 @@
         <h3 class="subsection-title">{{ t('imslp.typeDistributionChart') }}</h3>
         <div class="chart-wrapper">
           <svg viewBox="-1.1 -1.1 2.2 2.2" class="pie-chart">
-            <path
-              v-for="(slice, idx) in typeChartData.slices"
-              :key="idx"
-              :d="slice.path"
-              :fill="slice.color"
-              stroke="var(--panel-soft)"
-              stroke-width="0.02"
-            />
+            <template v-if="typeChartData.slices.length === 1">
+              <circle cx="0" cy="0" r="1" :fill="typeChartData.slices[0].color" />
+            </template>
+            <template v-else>
+              <path
+                v-for="(slice, idx) in typeChartData.slices"
+                :key="idx"
+                :d="slice.path"
+                :fill="slice.color"
+                stroke="var(--panel-soft)"
+                stroke-width="0.02"
+              />
+            </template>
           </svg>
           <ul class="chart-legend">
             <li v-for="(slice, idx) in typeChartData.slices" :key="idx">
@@ -69,14 +74,19 @@
         <h3 class="subsection-title">{{ t('imslp.instrumentDistributionChart') }}</h3>
         <div class="chart-wrapper">
           <svg viewBox="-1.1 -1.1 2.2 2.2" class="pie-chart">
-            <path
-              v-for="(slice, idx) in instrumentChartData.slices"
-              :key="idx"
-              :d="slice.path"
-              :fill="slice.color"
-              stroke="var(--panel-soft)"
-              stroke-width="0.02"
-            />
+            <template v-if="instrumentChartData.slices.length === 1">
+              <circle cx="0" cy="0" r="1" :fill="instrumentChartData.slices[0].color" />
+            </template>
+            <template v-else>
+              <path
+                v-for="(slice, idx) in instrumentChartData.slices"
+                :key="idx"
+                :d="slice.path"
+                :fill="slice.color"
+                stroke="var(--panel-soft)"
+                stroke-width="0.02"
+              />
+            </template>
           </svg>
           <ul class="chart-legend">
             <li v-for="(slice, idx) in instrumentChartData.slices" :key="idx">
@@ -91,7 +101,7 @@
       <div v-if="loadingWorks" class="subtle">{{ t('imslp.loadingWorks') }}</div>
       <div v-else>
         <div v-for="(groups, category) in groupedTables" :key="category" class="category-block">
-          <h3 class="subsection-title">{{ category }}</h3>
+          <h3 class="subsection-title">{{ translateImslpLabel('categories', category) }}</h3>
           <p v-if="category === 'Collections'" class="collection-hint subtle">
             {{ t('imslp.collectionHint') }}
           </p>
