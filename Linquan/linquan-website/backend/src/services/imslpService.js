@@ -12,7 +12,7 @@ const PYTHON_CMD = process.env.PYTHON_PATH || 'python3';
 const DEFAULT_TIMEOUT_MS = 60000;
 
 // ---------------------------------------------------------------------------
-// In-memory cache for IMSLP person_detail
+// In-memory cache for IMSLP person_detail and work_detail
 // ---------------------------------------------------------------------------
 const _personDetailCache = new Map();
 const PERSON_DETAIL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -44,8 +44,8 @@ const BING_API_HOST = 'api.bing.microsoft.com';
 const BING_API_PATH = '/v7.0/search';
 
 export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  // Check in-memory cache for person_detail
-  if (action === 'person_detail') {
+  // Check in-memory cache for person_detail and work_detail
+  if (action === 'person_detail' || action === 'work_detail') {
     const cacheKey = _makeCacheKey(action, args);
     const cached = _getCachedPersonDetail(cacheKey);
     if (cached) {
@@ -108,8 +108,8 @@ export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
         if (!parsed.ok) {
           reject(new HttpError(502, parsed.error || 'IMSLP proxy returned an error'));
         } else {
-          // Cache successful person_detail responses
-          if (action === 'person_detail') {
+          // Cache successful person_detail and work_detail responses
+          if (action === 'person_detail' || action === 'work_detail') {
             const cacheKey = _makeCacheKey(action, args);
             _setCachedPersonDetail(cacheKey, parsed.data);
           }

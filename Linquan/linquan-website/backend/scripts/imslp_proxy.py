@@ -500,6 +500,9 @@ def _fetch_images_metadata_fast(page):
     Optimized version of fetch_images_metadata.
     Pre-builds lookup tables from the HTML DOM so each image lookup is O(1)
     instead of O(n) BeautifulSoup scans.
+
+    Parallelizes the two independent network calls (HTTP HTML fetch +
+    mwclient image listing) to reduce total latency.
     """
     if page is None:
         return []
@@ -507,12 +510,30 @@ def _fetch_images_metadata_fast(page):
     esc_title = urllib.parse.quote(page.base_title.replace(" ", "_"))
     u = f"https://imslp.org/wiki/{esc_title}"
 
-    r = requests.get(
-        u,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; LinquanBot/1.0)"},
-        timeout=30,
-    )
-    if not r.ok:
+    def _fetch_html():
+        try:
+            resp = requests.get(
+                u,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; LinquanBot/1.0)"},
+                timeout=30,
+            )
+            return resp if resp.ok else None
+        except Exception:
+            return None
+
+    def _fetch_image_list():
+        try:
+            return list(page.images())
+        except Exception:
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        html_future = executor.submit(_fetch_html)
+        images_future = executor.submit(_fetch_image_list)
+        r = html_future.result()
+        all_images = images_future.result()
+
+    if r is None:
         return []
 
     s = bs4.BeautifulSoup(r.content, features="html.parser")
@@ -561,7 +582,7 @@ def _fetch_images_metadata_fast(page):
                 pass
 
     images = []
-    for f in page.images():
+    for f in all_images:
         f_title = f.base_title
         f_esc_title = urllib.parse.quote(f_title.replace(" ", "_"))
 
