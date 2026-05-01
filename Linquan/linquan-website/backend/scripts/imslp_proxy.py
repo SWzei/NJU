@@ -11,6 +11,9 @@ import re
 import sys
 import traceback
 
+import bs4
+import requests
+
 import imslp.client
 import imslp.interfaces.constants
 import imslp.interfaces.internal
@@ -52,7 +55,10 @@ _load_local_cache()
 
 def _extract_page_title(permlink: str) -> str:
     if permlink.startswith(IMSLP_WIKI_PREFIX):
-        return permlink[len(IMSLP_WIKI_PREFIX):]
+        permlink = permlink[len(IMSLP_WIKI_PREFIX):]
+    # Strip Category: prefix for person pages
+    if permlink.startswith("Category:"):
+        permlink = permlink[len("Category:"):]
     return permlink
 
 
@@ -60,6 +66,10 @@ def _normalize_record(record: dict) -> dict:
     rec = dict(record)
     permlink = rec.get("permlink", "")
     rec["permlink"] = _extract_page_title(permlink)
+    # strip Category: prefix from id if present
+    rec_id = rec.get("id", "")
+    if isinstance(rec_id, str) and rec_id.startswith("Category:"):
+        rec["id"] = rec_id[len("Category:"):]
     return rec
 
 
@@ -104,7 +114,7 @@ def _score_field(query_tokens, field_value):
 
 
 def _smart_search_works(title, composer, limit=100):
-    """改进的乐谱搜索：分词匹配 + 跨字段搜索 + 按相关性排序。"""
+    """乐谱搜索：分词匹配 + 跨字段搜索 + 按相关性排序。"""
     records = list(imslp.interfaces.internal.list_works())
     title_tokens = _tokenize(title)
     composer_tokens = _tokenize(composer)
@@ -153,7 +163,7 @@ def _smart_search_works(title, composer, limit=100):
 
 
 def _smart_search_people(name, limit=100):
-    """改进的人物搜索：分词匹配 + 按相关性排序。"""
+    """人物搜索：分词匹配 + 按相关性排序。"""
     records = list(imslp.interfaces.internal.list_people())
     tokens = _tokenize(name)
 
@@ -378,17 +388,72 @@ def action_work_detail(args: dict):
     }
 
 
-def _fetch_category_members(client, category_name, subcategory=None):
+def _extract_tag_text(tag: bs4.element.Tag) -> str:
+    """Extracts text content from a BeautifulSoup Tag, matching imslp.scraping logic."""
+    if tag is None or tag.text is None:
+        return ""
+    return tag.text.replace("\xa0", " ").strip()
+
+
+def _fetch_subcategory_from_wiki(category_name: str, subcategory: str):
+    """
+    Scrape the IMSLP wiki Category page for a specific subcategory tab.
+    Used for subcategories that do not exist as real MediaWiki categories
+    (e.g., 'As Arranger', 'As Copyist', 'As Dedicatee', 'As Editor').
+    """
+    cat_permlink = category_name.replace(" ", "_")
+    url = f"https://imslp.org/wiki/Category:{cat_permlink}"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; LinquanBot/1.0)"}
+
+    try:
+        r = requests.get(url, headers=headers, timeout=30)
+        if not r.ok:
+            return []
+    except Exception:
+        return []
+
+    s = bs4.BeautifulSoup(r.content, features="html.parser")
+
+    for h3 in s.find_all("h3", class_="nojs"):
+        tab_title = _extract_tag_text(h3)
+        if tab_title.startswith(subcategory):
+            parent = h3.find_parent("div", class_="jq-ui-tabs")
+            if not parent:
+                continue
+
+            items = []
+            seen = set()
+            for a in parent.find_all("a", href=True, class_="categorypagelink"):
+                title = _extract_tag_text(a)
+                href = a.get("href", "")
+                if not title or not href.startswith("/wiki/"):
+                    continue
+                if title in seen:
+                    continue
+                seen.add(title)
+                permlink = title.replace(" ", "_")
+                items.append({"Title": title, "__link_Title": permlink})
+            return items
+
+    return []
+
+
+def _fetch_category_members_all(client, category_name: str, subcategory: str = None):
+    """Fetch all members of a MediaWiki category via mwclient (handles pagination)."""
     cat = f"Category:{category_name}"
     if subcategory:
         cat += f"/{subcategory}"
     try:
         page = client.pages[cat]
         members = []
+        seen = set()
         for member in page.members():
             title = member.name if hasattr(member, "name") else str(member)
             if title.startswith("Category:"):
                 continue
+            if title in seen:
+                continue
+            seen.add(title)
             permlink = title.replace(" ", "_")
             members.append({"Title": title, "__link_Title": permlink})
         return members
@@ -450,22 +515,30 @@ def action_person_detail(args: dict):
     category_name = permlink.replace("_", " ")
     tables = {}
     client = imslp.interfaces.mw_api.ImslpMwClient()
+
+    # Subcategories that exist as real MediaWiki sub-categories
+    _MW_SUBCATEGORIES = {"Collections", "Collaborations", "Books", "Pasticcios"}
+
     for subcategory in imslp.interfaces.constants.IMSLP_SUBCATEGORIES:
-        table = []
-        try:
-            table = imslp.interfaces.scraping.fetch_category_table(
-                category_name=category_name,
-                subcategory=subcategory,
-            )
-            table = _enrich_table_with_links(
-                table, client, category_name, subcategory
-            )
-        except Exception:
-            pass
-        if not table:
-            table = _fetch_category_members(client, category_name, subcategory)
-        if table:
-            tables[subcategory] = table
+        items = []
+
+        if subcategory == "Compositions":
+            # Compositions = all members of the main category (mwclient handles pagination)
+            items = _fetch_category_members_all(client, category_name)
+        elif subcategory in _MW_SUBCATEGORIES:
+            # These have real MediaWiki sub-categories
+            items = _fetch_category_members_all(client, category_name, subcategory)
+        else:
+            # As Arranger / As Copyist / As Dedicatee / As Editor
+            # These do NOT have MediaWiki sub-categories; scrape the wiki page instead.
+            items = _fetch_subcategory_from_wiki(category_name, subcategory)
+            # Fallback: try MediaWiki sub-category just in case IMSLP adds it later
+            if not items:
+                items = _fetch_category_members_all(client, category_name, subcategory)
+
+        if items:
+            tables[subcategory] = items
+
     return {
         "permlink": permlink,
         "name": category_name,
