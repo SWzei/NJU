@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import traceback
+import urllib.parse
 
 import bs4
 import requests
@@ -19,6 +20,7 @@ import imslp.interfaces.constants
 import imslp.interfaces.internal
 import imslp.interfaces.mw_api
 import imslp.interfaces.scraping
+from imslp.interfaces.scraping import IMSLP_REGEXP_RATINGS, IMSLP_REGEXP_PAGE_COUNT
 
 IMSLP_WIKI_PREFIX = "https://imslp.org/wiki/"
 
@@ -60,6 +62,124 @@ def _extract_page_title(permlink: str) -> str:
     if permlink.startswith("Category:"):
         permlink = permlink[len("Category:"):]
     return permlink
+
+
+# Known instrument / part names that appear at the end of IMSLP file titles.
+# Includes common English, French, and German variants.
+_KNOWN_INSTRUMENTS = {
+    # Common English names
+    "Piano", "Organ", "Harpsichord", "Clavichord", "Celesta",
+    "Violin", "Viola", "Cello", "Bass", "Contrabass", "Double Bass",
+    "Flute", "Piccolo", "Oboe", "English Horn", "Cor Anglais",
+    "Clarinet", "Bass Clarinet", "Bassoon", "Contrabassoon",
+    "Horn", "HornF", "Trumpet", "Cornet", "Trombone", "Tuba",
+    "Euphonium", "Baritone", "Saxophone", "Saxhorn",
+    "Harp", "Guitar", "Mandolin", "Banjo", "Lute",
+    "Timpani", "Percussion", "Drums", "Cymbals", "Triangle",
+    "Soprano", "Mezzo", "Alto", "Tenor", "Baritone", "Bass",
+    "Voice", "Choir", "Chorus",
+    # French variants (common in IMSLP orchestral parts)
+    "Violon", "Violoncelle", "Violon1", "Violon2",
+    "Hautbois", "Hautbois1", "Hautbois2",
+    "Clarinette", "Clarinette1", "Clarinette2",
+    "Basson", "Basson1", "Basson2",
+    "Cor", "Cor1", "Cor2", "Cor3", "Cor4",
+    "Trompette", "Trompette1", "Trompette2",
+    "Trombone1", "Trombone2", "Trombone3",
+    "Timbales", "Timbales1",
+    "Contrebasse", "Contrebasses", "Basses",
+    "Flute1", "Flute2", "Flute3",
+    "Piccolo1", "Piccolo2",
+    # German variants
+    "Violine", "Bratsche", "Violoncell", "Kontrabass",
+    "Flote", "Oboe", "Klarinette", "Fagott",
+    "Horn", "Trompete", "Posaune", "Tuba",
+    "Pauken",
+    # Other common IMSLP labels
+    "Score", "Part", "Parts", "Full Score", "Miniature Score",
+    "Vocal Score", "Piano Score",
+    # Misc
+    "Cello1", "Cello2",
+    "Violin1", "Violin2", "Violin3",
+    "Viola1", "Viola2",
+}
+
+# Normalize matched instrument variants to English display names.
+_INSTRUMENT_NORMALIZE = {
+    "Violon": "Violin", "Violon1": "Violin", "Violon2": "Violin",
+    "Hautbois": "Oboe", "Hautbois1": "Oboe", "Hautbois2": "Oboe",
+    "Clarinette": "Clarinet", "Clarinette1": "Clarinet", "Clarinette2": "Clarinet",
+    "Basson": "Bassoon", "Basson1": "Bassoon", "Basson2": "Bassoon",
+    "Cor": "Horn", "Cor1": "Horn", "Cor2": "Horn", "Cor3": "Horn", "Cor4": "Horn",
+    "Trompette": "Trumpet", "Trompette1": "Trumpet", "Trompette2": "Trumpet",
+    "Trombone1": "Trombone", "Trombone2": "Trombone", "Trombone3": "Trombone",
+    "Timbales": "Timpani", "Timbales1": "Timpani",
+    "Contrebasse": "Bass", "Contrebasses": "Bass", "Basses": "Bass",
+    "Flute1": "Flute", "Flute2": "Flute", "Flute3": "Flute",
+    "Piccolo1": "Piccolo", "Piccolo2": "Piccolo",
+    "Violoncelle": "Cello",
+    "Violine": "Violin", "Bratsche": "Viola", "Violoncell": "Cello",
+    "Kontrabass": "Bass",
+    "Flote": "Flute", "Klarinette": "Clarinet", "Fagott": "Bassoon",
+    "Trompete": "Trumpet", "Posaune": "Trombone",
+    "Pauken": "Timpani",
+}
+
+
+def _extract_instruments_from_file_title(title: str) -> list:
+    """
+    Extract instrument/part labels from an IMSLP file title.
+    Returns a list like ['Score'] or ['Violin'] or ['Oboe'].
+    """
+    if not title:
+        return []
+
+    # Strip common extensions (some titles have nested extensions like .musx.pdf)
+    ext_stripped = title
+    pattern = r"\.(pdf|mp3|midi?|mid|musx?|xml|mxl|sib|mscz)$"
+    while re.search(pattern, ext_stripped, re.IGNORECASE):
+        ext_stripped = re.sub(pattern, "", ext_stripped, flags=re.IGNORECASE)
+
+    # Split on common delimiters: dash, underscore, space
+    parts = re.split(r"[-_\s]+", ext_stripped)
+    if not parts:
+        return []
+
+    # Check the last non-empty segment (most common pattern: "... - Instrument.pdf")
+    for part in reversed(parts):
+        if not part:
+            continue
+        matched = None
+        # Try exact match first
+        if part in _KNOWN_INSTRUMENTS:
+            matched = part
+        else:
+            # Strip trailing digits (Violon1 -> Violon, Flute2 -> Flute)
+            cleaned_no_digits = re.sub(r"\d+$", "", part)
+            if cleaned_no_digits in _KNOWN_INSTRUMENTS:
+                matched = cleaned_no_digits
+            else:
+                # Strip trailing 's' (Basses -> Bass) – but only if the singular form exists
+                for suffix in ["es", "s"]:
+                    if cleaned_no_digits.endswith(suffix) and cleaned_no_digits[:-len(suffix)] in _KNOWN_INSTRUMENTS:
+                        matched = cleaned_no_digits[:-len(suffix)]
+                        break
+
+        if matched:
+            normalized = _INSTRUMENT_NORMALIZE.get(matched, matched)
+            return [normalized]
+
+    # Fallback: scan entire title for "for <instrument>" patterns (e.g. "Arr. for Piano 4 h.")
+    title_lower = ext_stripped.lower()
+    m = re.search(r"\bfor\s+([A-Za-z\s]+)\b", title_lower, re.IGNORECASE)
+    if m:
+        instrument_phrase = m.group(1).strip().title()
+        for known in _KNOWN_INSTRUMENTS:
+            if instrument_phrase.startswith(known):
+                normalized = _INSTRUMENT_NORMALIZE.get(known, known)
+                return [normalized]
+
+    return []
 
 
 def _normalize_record(record: dict) -> dict:
@@ -373,14 +493,131 @@ def action_list_people(args: dict):
     return {"items": [_normalize_record(r) for r in results]}
 
 
+def _fetch_images_metadata_fast(page):
+    """
+    Optimized version of fetch_images_metadata.
+    Pre-builds lookup tables from the HTML DOM so each image lookup is O(1)
+    instead of O(n) BeautifulSoup scans.
+    """
+    if page is None:
+        return []
+
+    esc_title = urllib.parse.quote(page.base_title.replace(" ", "_"))
+    u = f"https://imslp.org/wiki/{esc_title}"
+
+    r = requests.get(
+        u,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; LinquanBot/1.0)"},
+        timeout=30,
+    )
+    if not r.ok:
+        return []
+
+    s = bs4.BeautifulSoup(r.content, features="html.parser")
+
+    # Parse ratings from embedded JavaScript
+    ratings_dict = {}
+    m = IMSLP_REGEXP_RATINGS.search(s.__str__())
+    if m is not None:
+        try:
+            old = json.loads(m.group(1))
+            for key, value in old.items():
+                try:
+                    ratings_dict[int(key)] = {
+                        "rating": value[0],
+                        "count": int(value[1]),
+                    }
+                except (ValueError, IndexError):
+                    continue
+        except json.JSONDecodeError:
+            pass
+
+    # Pre-build lookup tables from all <a> tags in a single pass
+    href_map = {}
+    title_map = {}
+    counter_map = {}
+
+    for a in s.find_all("a", href=True):
+        href = a["href"]
+        a_title = a.get("title", "")
+
+        # File links
+        if href.startswith("/wiki/File:"):
+            href_map[href] = a
+            if a_title.startswith("File:"):
+                title_map[a_title] = a
+
+        # Download counter links: /wiki/Special:GetFCtrStats/@123
+        if href.startswith("/wiki/Special:GetFCtrStats/@"):
+            try:
+                fid = int(href.split("@")[-1])
+                counter_map[fid] = int(a.text.strip())
+            except ValueError:
+                pass
+
+    images = []
+    for f in page.images():
+        f_title = f.base_title
+        f_esc_title = urllib.parse.quote(f_title.replace(" ", "_"))
+
+        # O(1) lookup instead of s.find() DOM scan
+        elem = href_map.get(f"/wiki/File:{f_esc_title}") or title_map.get(f"File:{f_title}")
+        if elem is None:
+            continue
+
+        text = elem.text.strip()
+        if not text:
+            continue
+
+        try:
+            file_id = int(text.replace("#", ""))
+        except ValueError:
+            continue
+
+        file_counter = counter_map.get(file_id)
+        if file_counter is None:
+            continue
+
+        # Extract page count from parent text
+        page_count = None
+        parent_text = elem.parent.text if elem.parent else ""
+        pcm = IMSLP_REGEXP_PAGE_COUNT.search(parent_text)
+        if pcm is not None:
+            try:
+                page_count = int(pcm.group(1))
+            except ValueError:
+                pass
+
+        # Fix image URL
+        url = f.imageinfo.get("url", "")
+        if url.startswith("/"):
+            url = "http:" + url
+
+        images.append({
+            "id": file_id,
+            "rating": ratings_dict.get(file_id, {}).get("rating", -1),
+            "rating_count": ratings_dict.get(file_id, {}).get("count", 0),
+            "download_count": file_counter,
+            "title": f_title,
+            "url": url,
+            "page_count": page_count,
+            "size": f.imageinfo.get("size"),
+            "sha1": f.imageinfo.get("sha1"),
+        })
+
+    return images
+
+
 def action_work_detail(args: dict):
     permlink = _extract_page_title(args["permlink"])
     client = imslp.interfaces.mw_api.ImslpMwClient()
     page = client.pages[permlink]
-    images = imslp.interfaces.scraping.fetch_images_metadata(page)
+    images = _fetch_images_metadata_fast(page)
     # Remove non-serializable mwclient.image.Image objects
     for img in images:
         img.pop("obj", None)
+        # Extract instrument labels from the file title
+        img["instruments"] = _extract_instruments_from_file_title(img.get("title", ""))
     return {
         "permlink": permlink,
         "title": page.base_title,

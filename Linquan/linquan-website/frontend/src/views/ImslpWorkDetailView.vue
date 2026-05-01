@@ -29,7 +29,14 @@
       <ul v-if="detail.images && detail.images.length > 0" class="score-list">
         <li v-for="img in detail.images" :key="img.id" class="score-card">
           <div class="score-info">
-            <p class="score-title">{{ img.title }}</p>
+            <p class="score-title">{{ img.title }}
+              <span
+                v-for="instr in img.instruments"
+                :key="instr"
+                class="inline-tag instrument"
+                :style="tagStyle(instr)"
+              >{{ instr }}</span>
+            </p>
             <div class="score-meta">
               <span v-if="img.page_count">{{ t('imslp.pageCount', { count: img.page_count }) }}</span>
               <span v-if="img.download_count != null">{{ t('imslp.downloadCount', { count: img.download_count }) }}</span>
@@ -196,6 +203,24 @@ onMounted(async () => {
 .meta-tag.instrument {
   background: rgba(var(--success-rgb), 0.08);
   border-color: rgba(var(--success-rgb), 0.25);
+  color: var(--success);
+}
+
+.inline-tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.inline-tag.instrument {
+  background: rgba(var(--success-rgb), 0.08);
+  border: 1px solid rgba(var(--success-rgb), 0.2);
   color: var(--success);
 }
 </style>

@@ -41,9 +41,10 @@ function hashString(str) {
 
 export function getTagColor(name) {
   if (!name) return '#64748b';
-  const fixed = INSTRUMENT_COLOR_MAP[name];
+  const key = name.toLowerCase();
+  const fixed = INSTRUMENT_COLOR_MAP[key];
   if (fixed) return fixed;
-  return TAG_COLOR_PALETTE[hashString(name) % TAG_COLOR_PALETTE.length];
+  return TAG_COLOR_PALETTE[hashString(key) % TAG_COLOR_PALETTE.length];
 }
 
 export function tagStyle(name) {
