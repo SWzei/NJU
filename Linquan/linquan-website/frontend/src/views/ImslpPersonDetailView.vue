@@ -26,7 +26,7 @@
             class="meta-tag"
             :style="tagStyle(item.type)"
           >
-            {{ item.type }} ({{ item.count }})
+            {{ translateImslpLabel('types', item.type) }} ({{ item.count }})
           </span>
         </div>
         <div v-if="detail.metadata.instrumentDistribution.length" class="meta-row">
@@ -37,7 +37,7 @@
             class="meta-tag instrument"
             :style="tagStyle(item.instrument)"
           >
-            {{ item.instrument }} ({{ item.count }})
+            {{ translateImslpLabel('instruments', item.instrument) }} ({{ item.count }})
           </span>
         </div>
       </div>
@@ -58,7 +58,7 @@
           <ul class="chart-legend">
             <li v-for="(slice, idx) in typeChartData.slices" :key="idx">
               <span class="legend-dot" :style="{ background: slice.color }"></span>
-              <span class="legend-label">{{ slice.label }}</span>
+              <span class="legend-label">{{ translateImslpLabel('types', slice.label) }}</span>
               <span class="legend-value">{{ slice.value }} ({{ slice.percentage }}%)</span>
             </li>
           </ul>
@@ -81,7 +81,7 @@
           <ul class="chart-legend">
             <li v-for="(slice, idx) in instrumentChartData.slices" :key="idx">
               <span class="legend-dot" :style="{ background: slice.color }"></span>
-              <span class="legend-label">{{ slice.label }}</span>
+              <span class="legend-label">{{ translateImslpLabel('instruments', slice.label) }}</span>
               <span class="legend-value">{{ slice.value }} ({{ slice.percentage }}%)</span>
             </li>
           </ul>
@@ -128,17 +128,17 @@
                               v-if="row.__metadata.type"
                               class="inline-tag type"
                               :style="tagStyle(row.__metadata.type)"
-                            >{{ row.__metadata.type }}</span>
+                            >{{ translateImslpLabel('types', row.__metadata.type) }}</span>
                             <span
                               v-if="row.__metadata.tone && row.__metadata.mode"
                               class="inline-tag key"
-                            >{{ row.__metadata.tone }} {{ row.__metadata.mode }}</span>
+                            >{{ translateImslpLabel('tones', row.__metadata.tone) }} {{ translateImslpLabel('modes', row.__metadata.mode) }}</span>
                             <span
                               v-for="instr in row.__metadata.instruments"
                               :key="instr"
                               class="inline-tag instrument"
                               :style="tagStyle(instr)"
-                            >{{ instr }}</span>
+                            >{{ translateImslpLabel('instruments', instr) }}</span>
                           </template>
                         </div>
                       </td>
@@ -165,6 +165,7 @@ import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
 import { tagStyle, getTagColor } from '@/utils/tagColors';
+import { translateImslpLabel } from '@/i18n';
 
 const route = useRoute();
 const { t } = useI18n();

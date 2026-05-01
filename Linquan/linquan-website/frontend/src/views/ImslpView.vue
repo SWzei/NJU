@@ -33,21 +33,21 @@
           <label>{{ t('imslp.filterPeriod') }}</label>
           <select v-model="filterPeriod">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="p in filterOptions.periods" :key="p.value" :value="p.value">{{ p.label }}</option>
+            <option v-for="p in filterOptions.periods" :key="p.value" :value="p.value">{{ periodLabel(p.label) }}</option>
           </select>
         </div>
         <div class="field filter-field">
           <label>{{ t('imslp.filterInstrument') }}</label>
           <select v-model="filterInstrument">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="i in filterOptions.instruments" :key="i" :value="i">{{ i }}</option>
+            <option v-for="i in filterOptions.instruments" :key="i" :value="i">{{ translateImslpLabel('instruments', i) }}</option>
           </select>
         </div>
         <div class="field filter-field">
           <label>{{ t('imslp.filterType') }}</label>
           <select v-model="filterType">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="tp in filterOptions.types" :key="tp" :value="tp">{{ tp }}</option>
+            <option v-for="tp in filterOptions.types" :key="tp" :value="tp">{{ translateImslpLabel('types', tp) }}</option>
           </select>
         </div>
       </div>
@@ -66,21 +66,21 @@
           <label>{{ t('imslp.filterPeriod') }}</label>
           <select v-model="filterPeriod">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="p in filterOptions.periods" :key="p.value" :value="p.value">{{ p.label }}</option>
+            <option v-for="p in filterOptions.periods" :key="p.value" :value="p.value">{{ periodLabel(p.label) }}</option>
           </select>
         </div>
         <div class="field filter-field">
           <label>{{ t('imslp.filterInstrument') }}</label>
           <select v-model="filterInstrument">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="i in filterOptions.instruments" :key="i" :value="i">{{ i }}</option>
+            <option v-for="i in filterOptions.instruments" :key="i" :value="i">{{ translateImslpLabel('instruments', i) }}</option>
           </select>
         </div>
         <div class="field filter-field">
           <label>{{ t('imslp.filterType') }}</label>
           <select v-model="filterType">
             <option value="">{{ t('imslp.all') }}</option>
-            <option v-for="tp in filterOptions.types" :key="tp" :value="tp">{{ tp }}</option>
+            <option v-for="tp in filterOptions.types" :key="tp" :value="tp">{{ translateImslpLabel('types', tp) }}</option>
           </select>
         </div>
       </div>
@@ -104,9 +104,9 @@
             <h3>{{ displayTitle(item) }}</h3>
             <p class="subtle">{{ displaySubtitle(item) }}</p>
             <div v-if="activeTab === 'works' && item.metadata" class="meta-tags">
-              <span v-if="item.metadata.type" class="meta-tag type" :style="tagStyle(item.metadata.type)">{{ item.metadata.type }}</span>
+              <span v-if="item.metadata.type" class="meta-tag type" :style="tagStyle(item.metadata.type)">{{ translateImslpLabel('types', item.metadata.type) }}</span>
               <span v-if="item.metadata.tone && item.metadata.mode" class="meta-tag key">
-                {{ item.metadata.tone }} {{ item.metadata.mode }}
+                {{ translateImslpLabel('tones', item.metadata.tone) }} {{ translateImslpLabel('modes', item.metadata.mode) }}
               </span>
               <span
                 v-for="instr in item.metadata.instruments"
@@ -114,7 +114,7 @@
                 class="meta-tag instrument"
                 :style="tagStyle(instr)"
               >
-                {{ instr }}
+                {{ translateImslpLabel('instruments', instr) }}
               </span>
             </div>
             <div v-if="activeTab === 'people' && item.metadata" class="meta-tags">
@@ -137,6 +137,7 @@ import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
 import { tagStyle } from '@/utils/tagColors';
+import { translateImslpLabel } from '@/i18n';
 
 const { t } = useI18n();
 const { showError } = useToast();

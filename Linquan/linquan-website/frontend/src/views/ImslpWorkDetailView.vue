@@ -10,9 +10,9 @@
 
       <div v-if="detail.metadata" class="metadata-panel">
         <div class="meta-row">
-          <span v-if="detail.metadata.type" class="meta-tag type" :style="tagStyle(detail.metadata.type)">{{ detail.metadata.type }}</span>
+          <span v-if="detail.metadata.type" class="meta-tag type" :style="tagStyle(detail.metadata.type)">{{ translateImslpLabel('types', detail.metadata.type) }}</span>
           <span v-if="detail.metadata.tone && detail.metadata.mode" class="meta-tag key">
-            {{ detail.metadata.tone }} {{ detail.metadata.mode }}
+            {{ translateImslpLabel('tones', detail.metadata.tone) }} {{ translateImslpLabel('modes', detail.metadata.mode) }}
           </span>
           <span
             v-for="instr in detail.metadata.instruments"
@@ -20,7 +20,7 @@
             class="meta-tag instrument"
             :style="tagStyle(instr)"
           >
-            {{ instr }}
+            {{ translateImslpLabel('instruments', instr) }}
           </span>
         </div>
       </div>
@@ -35,12 +35,12 @@
                 :key="instr"
                 class="inline-tag instrument"
                 :style="tagStyle(instr)"
-              >{{ instr }}</span>
+              >{{ translateImslpLabel('instruments', instr) }}</span>
             </p>
             <div class="score-meta">
               <span v-if="img.page_count">{{ t('imslp.pageCount', { count: img.page_count }) }}</span>
               <span v-if="img.download_count != null">{{ t('imslp.downloadCount', { count: img.download_count }) }}</span>
-              <span v-if="img.rating >= 0">{{ t('imslp.rating', { rating: img.rating, count: img.rating_count }) }}</span>
+              <span v-if="img.rating >= 0">{{ t('imslp.rating', { rating: Number(img.rating).toFixed(1), count: img.rating_count }) }}</span>
               <span v-if="img.size">{{ t('imslp.fileSize', { size: formatBytes(img.size) }) }}</span>
             </div>
           </div>
@@ -66,6 +66,7 @@ import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
 import { tagStyle } from '@/utils/tagColors';
+import { translateImslpLabel } from '@/i18n';
 
 const route = useRoute();
 const { t } = useI18n();
