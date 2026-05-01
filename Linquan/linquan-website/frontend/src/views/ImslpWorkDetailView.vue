@@ -35,19 +35,19 @@
           </div>
           <div v-if="detail.pageMetadata.key" class="info-row">
             <span class="info-label">{{ t('imslp.key') }}:</span>
-            <span class="info-value">{{ detail.pageMetadata.key }}</span>
+            <span class="info-value">{{ translatePageMetadata('key', detail.pageMetadata.key) }}</span>
           </div>
           <div v-if="detail.pageMetadata.piece_style" class="info-row">
             <span class="info-label">{{ t('imslp.pieceStyle') }}:</span>
-            <span class="info-value">{{ detail.pageMetadata.piece_style }}</span>
+            <span class="info-value">{{ translatePageMetadata('piece_style', detail.pageMetadata.piece_style) }}</span>
           </div>
           <div v-if="detail.pageMetadata.instrumentation" class="info-row">
             <span class="info-label">{{ t('imslp.instrumentation') }}:</span>
-            <span class="info-value">{{ detail.pageMetadata.instrumentation }}</span>
+            <span class="info-value">{{ translatePageMetadata('instrumentation', detail.pageMetadata.instrumentation) }}</span>
           </div>
           <div v-if="detail.pageMetadata.movements" class="info-row">
             <span class="info-label">{{ t('imslp.movements') }}:</span>
-            <span class="info-value">{{ detail.pageMetadata.movements }}</span>
+            <span class="info-value">{{ translatePageMetadata('movements', detail.pageMetadata.movements) }}</span>
           </div>
           <div v-if="detail.pageMetadata.first_publication" class="info-row">
             <span class="info-label">{{ t('imslp.firstPublication') }}:</span>
@@ -63,7 +63,7 @@
           </div>
           <div v-if="detail.pageMetadata.avg_duration" class="info-row">
             <span class="info-label">{{ t('imslp.avgDuration') }}:</span>
-            <span class="info-value">{{ detail.pageMetadata.avg_duration }}</span>
+            <span class="info-value">{{ translatePageMetadata('avg_duration', detail.pageMetadata.avg_duration) }}</span>
           </div>
         </div>
       </div>
@@ -109,7 +109,7 @@ import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
 import { tagStyle } from '@/utils/tagColors';
-import { translateImslpLabel } from '@/i18n';
+import { translateImslpLabel, translatePageMetadata } from '@/i18n';
 
 const route = useRoute();
 const { t } = useI18n();

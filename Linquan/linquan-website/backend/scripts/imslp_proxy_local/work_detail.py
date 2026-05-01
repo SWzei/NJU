@@ -12,10 +12,35 @@ from .constants import IMSLP_WIKI_PREFIX
 from .utils import extract_page_title, extract_instruments_from_file_title
 
 
+# Labels that indicate a table is an IMSLP work infobox.
+_INFOBOX_INDICATORS = frozenset({
+    "Year/Date of Composition",
+    "Opus/Catalogue Number",
+    "Key",
+    "Movements/Sections",
+    "Piece Style",
+    "Instrumentation",
+    "First Publication",
+    "First Performance",
+    "Dedication",
+    "Composer Time Period",
+    "Average Duration",
+    "Work Title",
+})
+
+
+def _is_infobox_table(table):
+    """Return True if the table contains at least one known infobox label."""
+    text = table.get_text(strip=True)
+    return any(indicator in text for indicator in _INFOBOX_INDICATORS)
+
+
 def _extract_work_metadata(soup):
     """Extract work metadata from the IMSLP infobox table in the page HTML."""
     metadata = {}
     for table in soup.find_all("table"):
+        if not _is_infobox_table(table):
+            continue
         for tr in table.find_all("tr"):
             tds = tr.find_all(["td", "th"])
             if len(tds) < 2:

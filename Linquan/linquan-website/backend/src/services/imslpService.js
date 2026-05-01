@@ -29,7 +29,7 @@ function _getCachedPersonDetail(key) {
     _personDetailCache.delete(key);
     return null;
   }
-  return entry.data;
+  return structuredClone(entry.data);
 }
 
 function _setCachedPersonDetail(key, data) {
@@ -37,7 +37,7 @@ function _setCachedPersonDetail(key, data) {
     const firstKey = _personDetailCache.keys().next().value;
     _personDetailCache.delete(firstKey);
   }
-  _personDetailCache.set(key, { data, time: Date.now() });
+  _personDetailCache.set(key, { data: structuredClone(data), time: Date.now() });
 }
 
 const BING_API_HOST = 'api.bing.microsoft.com';
