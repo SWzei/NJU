@@ -420,7 +420,7 @@ export function getComposerTypeDistributionForChart(name) {
   const metadata = getComposerMetadata(name);
   if (!metadata) return null;
 
-  const distribution = metadata.typeDistribution.filter((d) => d.type !== 'Other' && d.type !== 'other');
+  const distribution = metadata.typeDistribution;
   if (!distribution || distribution.length === 0) return null;
 
   const labels = distribution.map((d) => d.type);

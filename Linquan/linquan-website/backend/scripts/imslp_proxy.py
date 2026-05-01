@@ -115,6 +115,7 @@ _INSTRUMENT_NORMALIZE = {
     "Trombone1": "Trombone", "Trombone2": "Trombone", "Trombone3": "Trombone",
     "Timbales": "Timpani", "Timbales1": "Timpani",
     "Contrebasse": "Bass", "Contrebasses": "Bass", "Basses": "Bass",
+    "HornF": "Horn",
     "Flute1": "Flute", "Flute2": "Flute", "Flute3": "Flute",
     "Piccolo1": "Piccolo", "Piccolo2": "Piccolo",
     "Violoncelle": "Cello",
@@ -543,9 +544,12 @@ def _fetch_images_metadata_fast(page):
 
         # File links
         if href.startswith("/wiki/File:"):
-            href_map[href] = a
+            # Prefer elements with non-empty text to avoid empty-text overrides
+            if href not in href_map or not href_map[href].text.strip():
+                href_map[href] = a
             if a_title.startswith("File:"):
-                title_map[a_title] = a
+                if a_title not in title_map or not title_map[a_title].text.strip():
+                    title_map[a_title] = a
 
         # Download counter links: /wiki/Special:GetFCtrStats/@123
         if href.startswith("/wiki/Special:GetFCtrStats/@"):

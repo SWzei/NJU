@@ -28,6 +28,8 @@ const INSTRUMENT_COLOR_MAP = {
   string: '#deb887',
   wind: '#5eb3d9',
   organ: '#b8860b',
+  euphonium: '#9b59b6',
+  score: '#64748b',
 };
 
 function hashString(str) {

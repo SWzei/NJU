@@ -896,6 +896,8 @@ const messages = {
         string: "弦乐",
         wind: "管乐",
         organ: "管风琴",
+        euphonium: "上低音号",
+        score: "总谱",
       },
       modes: {
         major: "大调",
@@ -1882,6 +1884,8 @@ const messages = {
         string: "String",
         wind: "Wind",
         organ: "Organ",
+        euphonium: "Euphonium",
+        score: "Score",
       },
       modes: {
         major: "Major",
@@ -1978,7 +1982,7 @@ applyLocaleToDocument(locale.value);
 
 export function translateImslpLabel(category, value) {
   if (!value) return value;
-  const key = `imslp.${category}.${value}`;
+  const key = `imslp.${category}.${value.toLowerCase()}`;
   const localized = getMessage(locale.value, key) || getMessage("en", key) || value;
   return localized;
 }
