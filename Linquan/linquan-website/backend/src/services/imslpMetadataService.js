@@ -15,7 +15,7 @@ let db = null;
 function getDb() {
   if (!db) {
     try {
-      db = new Database(META_DB_PATH, { readonly: true });
+      db = new Database(META_DB_PATH);
       db.function('normalize_text', { deterministic: true }, (text) => {
         if (text === null || text === undefined) return '';
         return String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -445,4 +445,167 @@ export function getComposerInstrumentDistributionForChart(name) {
   const colors = distribution.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
 
   return { labels, values, colors };
+}
+
+// ---------------------------------------------------------------------------
+// Title-based metadata inference (heuristic, for works not in the DB)
+// ---------------------------------------------------------------------------
+
+const TYPE_KEYWORDS = [
+  'concerto', 'symphony', 'sonata', 'minuet', 'menuet', 'toccata',
+  'fugue', 'fuga', 'prelude', 'lied', 'oratorio', 'cantata',
+  'mass', 'opera', 'waltz', 'trio', 'quartet', 'quintet',
+  'sextet', 'septuor', 'septet', 'octuor', 'octet',
+  'ländler', 'song', 'variation', 'romance',
+];
+
+const TYPE_NORMALIZE = {
+  menuet: 'minuet',
+  fuga: 'fugue',
+  septet: 'septuor',
+  octet: 'octuor',
+};
+
+const TITLE_KEY_PATTERN = /\bin\s+([A-G](?:-(?:flat|sharp))?)\s+(major|minor)\b/i;
+
+function _inferType(title) {
+  const lower = title.toLowerCase();
+  for (const kw of TYPE_KEYWORDS) {
+    if (lower.includes(kw)) {
+      return TYPE_NORMALIZE[kw] || kw;
+    }
+  }
+  return null;
+}
+
+function _inferKey(title) {
+  const m = title.match(TITLE_KEY_PATTERN);
+  if (!m) return null;
+  return {
+    tone: m[1],
+    mode: m[2].toLowerCase(),
+  };
+}
+
+function _inferInstruments(title) {
+  const lower = title.toLowerCase();
+  const instruments = [];
+  for (const col of INSTRUMENT_COLUMNS) {
+    if (lower.includes(col)) {
+      instruments.push(col);
+    }
+  }
+  return instruments;
+}
+
+/**
+ * Infer metadata from an IMSLP work title using keyword matching.
+ * Returns an object shaped like getWorkMetadata() output, or null if
+ * nothing could be inferred.
+ */
+export function inferMetadataFromTitle(title) {
+  if (!title) return null;
+  const type = _inferType(title);
+  const key = _inferKey(title);
+  const instruments = _inferInstruments(title);
+
+  if (!type && !key && instruments.length === 0) {
+    return null;
+  }
+
+  return {
+    type,
+    mode: key?.mode || null,
+    tone: key?.tone || null,
+    instruments,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Persist inferred metadata back to the metadata DB
+// ---------------------------------------------------------------------------
+
+function _getNextComposerPk(conn) {
+  const row = conn.prepare('SELECT MAX(CAST(PK_composer AS INTEGER)) AS max_pk FROM composers').get();
+  return String((row?.max_pk || 0) + 1);
+}
+
+function _getNextWorkPk(conn) {
+  const row = conn.prepare('SELECT MAX(PK_work) AS max_pk FROM works').get();
+  return (row?.max_pk || 0) + 1;
+}
+
+function _getOrCreateComposer(conn, name) {
+  if (!name) return null;
+  const existing = conn.prepare('SELECT PK_composer FROM composers WHERE name = ?').get(name);
+  if (existing) return existing.PK_composer;
+
+  const pk = _getNextComposerPk(conn);
+  conn.prepare('INSERT INTO composers (PK_composer, name) VALUES (?, ?)').run(pk, name);
+  return pk;
+}
+
+/**
+ * Save inferred metadata for a work into the metadata DB.
+ * Composer is extracted from the title; if not already present a new
+ * composer row is created. If the work already exists its metadata is
+ * updated in place.
+ */
+export function saveInferredWorkMetadata(title, metadata) {
+  const conn = getDb();
+  if (!conn || !title || !metadata) return false;
+
+  const { composer } = extractComposerFromTitle(title);
+  const fkComposer = composer ? _getOrCreateComposer(conn, composer) : null;
+
+  // Map type name -> FK_Type
+  let fkType = null;
+  if (metadata.type) {
+    const typeRow = conn.prepare('SELECT PK_type FROM Types WHERE type = ?').get(metadata.type);
+    if (typeRow) fkType = typeRow.PK_type;
+  }
+
+  const existing = conn.prepare('SELECT PK_work FROM works WHERE title = ?').get(title);
+
+  const instrumentValues = {};
+  for (const col of INSTRUMENT_COLUMNS) {
+    instrumentValues[col] = metadata.instruments?.includes(col) ? 1 : 0;
+  }
+
+  if (existing) {
+    const sets = [
+      'FK_Type = ?',
+      'Mode = ?',
+      'Tone = ?',
+      ...INSTRUMENT_COLUMNS.map((c) => `${c} = ?`),
+    ];
+    if (fkComposer) sets.push('FK_composer = ?');
+
+    const params = [
+      fkType,
+      metadata.mode || null,
+      metadata.tone || null,
+      ...INSTRUMENT_COLUMNS.map((c) => instrumentValues[c]),
+    ];
+    if (fkComposer) params.push(fkComposer);
+    params.push(title);
+
+    conn.prepare(`UPDATE works SET ${sets.join(', ')} WHERE title = ?`).run(...params);
+  } else {
+    const pk = _getNextWorkPk(conn);
+    const cols = ['PK_work', 'title', 'FK_composer', 'FK_Type', 'Mode', 'Tone', ...INSTRUMENT_COLUMNS];
+    const placeholders = cols.map(() => '?').join(',');
+    const params = [
+      pk,
+      title,
+      fkComposer,
+      fkType,
+      metadata.mode || null,
+      metadata.tone || null,
+      ...INSTRUMENT_COLUMNS.map((c) => instrumentValues[c]),
+    ];
+    conn.prepare(`INSERT INTO works (${cols.join(',')}) VALUES (${placeholders})`).run(...params);
+  }
+
+  return true;
 }

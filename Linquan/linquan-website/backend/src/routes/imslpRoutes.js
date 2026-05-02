@@ -15,6 +15,8 @@ import {
   getWorksMetadataBatch,
   tokenizeQuery,
   normalizeText,
+  inferMetadataFromTitle,
+  saveInferredWorkMetadata,
 } from '../services/imslpMetadataService.js';
 import { BING_SEARCH_KEY } from '../config/env.js';
 import HttpError from '../utils/httpError.js';
@@ -102,6 +104,12 @@ router.get('/imslp/works', async (req, res, next) => {
           const metadata = getWorkMetadata(item.id);
           if (metadata) {
             item.metadata = metadata;
+          } else {
+            const inferred = inferMetadataFromTitle(item.id);
+            if (inferred) {
+              item.metadata = inferred;
+              try { saveInferredWorkMetadata(item.id, inferred); } catch {}
+            }
           }
           merged.push(item);
         }
@@ -110,6 +118,11 @@ router.get('/imslp/works', async (req, res, next) => {
       for (const item of bingData?.items || []) {
         if (item.permlink && !seen.has(item.permlink) && isRelevantToQuery(item, title, composer)) {
           seen.add(item.permlink);
+          const inferred = inferMetadataFromTitle(item.id);
+          if (inferred) {
+            item.metadata = inferred;
+            try { saveInferredWorkMetadata(item.id, inferred); } catch {}
+          }
           merged.push(item);
         }
       }
@@ -276,6 +289,12 @@ router.get('/imslp/people/:permlink/works', async (req, res, next) => {
         for (const row of group) {
           if (row.Title && batchMeta[row.Title]) {
             row.__metadata = batchMeta[row.Title];
+          } else if (row.Title) {
+            const inferred = inferMetadataFromTitle(row.Title);
+            if (inferred) {
+              row.__metadata = inferred;
+              try { saveInferredWorkMetadata(row.Title, inferred); } catch {}
+            }
           }
         }
       }

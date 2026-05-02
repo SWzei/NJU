@@ -281,24 +281,43 @@ onMounted(async () => {
       loadingMeta.value = false;
     });
 
-  // 2. Load works list from IMSLP (slower)
+  // 2. Load works list from IMSLP (slower; may insert inferred metadata rows
+  //    into the local DB as a side effect for works it had not seen before).
   const worksPromise = api
     .get(`/imslp/people/${encodeURIComponent(permlink)}/works`, { signal: controller.signal })
     .then(
       ({ data }) => {
         groupedTables.value = data.groupedTables || {};
+        return true;
       },
       (err) => {
-        if (err.code === 'ERR_CANCELED') return;
+        if (err.code === 'ERR_CANCELED') return false;
         // Works load failure is non-fatal; just show empty tables
         groupedTables.value = {};
+        return false;
       }
     )
     .finally(() => {
       loadingWorks.value = false;
     });
 
-  await Promise.all([metaPromise, worksPromise]);
+  const [, worksOk] = await Promise.all([metaPromise, worksPromise]);
+
+  // 3. The works request above may have persisted newly-inferred works/instruments
+  //    into the metadata DB. Refresh the composer metadata so the pie charts
+  //    reflect the post-insert state.
+  if (worksOk) {
+    try {
+      const { data } = await api.get(
+        `/imslp/people/${encodeURIComponent(permlink)}`,
+        { signal: controller.signal }
+      );
+      detail.value = data;
+    } catch (err) {
+      if (err.code === 'ERR_CANCELED') return;
+      // Refresh failure is non-fatal: keep the previously rendered chart.
+    }
+  }
 });
 </script>
 
