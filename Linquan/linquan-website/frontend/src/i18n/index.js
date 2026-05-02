@@ -48,9 +48,20 @@ applyLocaleToDocument(locale.value);
 
 export function translateImslpLabel(category, value) {
   if (!value) return value;
-  const key = `imslp.${category}.${value.toLowerCase()}`;
-  const localized = getMessage(locale.value, key) || getMessage("en", key) || value;
-  return localized;
+  const str = String(value);
+  const lower = str.toLowerCase();
+  // Build candidate keys. Most i18n maps (instruments/types/modes/categories)
+  // use fully lowercase keys, but tones use capital-first form like "C-sharp".
+  const candidates = [lower];
+  const capitalized = lower.charAt(0).toUpperCase() + lower.slice(1);
+  if (capitalized !== lower) candidates.push(capitalized);
+  if (str !== lower && str !== capitalized) candidates.push(str);
+  for (const cand of candidates) {
+    const key = `imslp.${category}.${cand}`;
+    const localized = getMessage(locale.value, key) || getMessage("en", key);
+    if (localized) return localized;
+  }
+  return value;
 }
 
 function translateKey(key) {
