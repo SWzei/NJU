@@ -57,3 +57,10 @@ pnpm-debug.log*
 # =========================
 /Linquan/linquan-website/backend/uploads/
 /Linquan/linquan-website/uploads/
+
+# vim cache
+*~
+*.swp
+
+# python cache
+__pycache__

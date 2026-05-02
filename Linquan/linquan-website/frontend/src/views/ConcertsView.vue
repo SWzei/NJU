@@ -1,5 +1,46 @@
 <template>
-  <section class="grid-2">
+  <section v-if="selectedConcertId && !isConcertClosed && auditionSectionReady && (hasActiveAuditions || hasSubmittedApplications)" class="card panel">
+    <h2 class="section-title">{{ t('concerts.auditionInfoTitle') }}</h2>
+
+    <div v-if="!hasActiveAuditions" class="subtle">{{ t('concerts.noAuditionInfo') }}</div>
+
+    <div v-for="audition in activeAuditions" :key="audition.id" class="audition-info">
+      <h3>{{ audition.title }}</h3>
+      <p v-if="audition.auditionTime" class="subtle">
+        <strong>{{ t('concerts.auditionTimeLabel') }}:</strong>
+        {{ formatDate(audition.auditionTime) }}
+      </p>
+      <p v-if="audition.announcement" class="subtle multiline-text">{{ audition.announcement }}</p>
+      <p v-else-if="audition.description" class="subtle multiline-text">{{ audition.description }}</p>
+      <p v-if="audition.attachmentPath" class="subtle">
+        <a :href="audition.attachmentPath" target="_blank" rel="noopener">
+          {{ t('concerts.downloadAttachment') }}
+        </a>
+      </p>
+    </div>
+
+    <div v-if="hasSubmittedApplications" class="audition-results">
+      <div v-for="app in submittedApplications" :key="app.id" class="audition-result">
+        <p class="subtle">
+          <strong>{{ t('concerts.pieceZh') }}:</strong> {{ app.pieceZh || '-' }}
+        </p>
+        <p class="subtle">
+          <strong>{{ t('concerts.auditionResultLabel') }}:</strong>
+          <span :class="auditionStatusClass(app.auditionStatus)">
+            {{ auditionStatusText(app.auditionStatus) }}
+          </span>
+        </p>
+        <p v-if="app.auditionFeedback" class="subtle multiline-text">
+          <strong>
+            {{ app.auditionStatus === 'failed' ? t('concerts.auditionReasonLabel') : t('concerts.auditionFeedbackLabel') }}:
+          </strong>
+          {{ app.auditionFeedback }}
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid-2 section-space">
     <article class="card panel">
       <h2 class="section-title">{{ t('concerts.cycleTitle') }}</h2>
       <p class="subtle">{{ t('concerts.cycleSubtitle') }}</p>
@@ -127,7 +168,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
 import { useToast } from '@/composables/toast';
@@ -139,10 +180,21 @@ const selectedConcertId = ref(0);
 const applicationForms = ref([]);
 const submitting = ref(false);
 const removingItemIndex = ref(-1);
+const auditions = ref([]);
+const loadingAuditions = ref(false);
+const loadingApplications = ref(false);
 
 const { t, locale } = useI18n();
 const { showSuccess, showError } = useToast();
 const auth = useAuthStore();
+
+const selectedConcert = computed(() => concerts.value.find((c) => c.id === selectedConcertId.value) || null);
+const isConcertClosed = computed(() => selectedConcert.value?.status === 'closed');
+const activeAuditions = computed(() => auditions.value.filter((a) => a.status !== 'closed'));
+const hasActiveAuditions = computed(() => activeAuditions.value.length > 0);
+const submittedApplications = computed(() => applicationForms.value.filter((f) => f.id));
+const hasSubmittedApplications = computed(() => submittedApplications.value.length > 0);
+const auditionSectionReady = computed(() => !loadingAuditions.value && !loadingApplications.value);
 
 const defaultApplicantName = ref('');
 const defaultStudentNumber = ref('');
@@ -163,7 +215,9 @@ function createBlankApplicationForm(seed = {}) {
     scoreFilePath: seed.scoreFilePath || null,
     status: seed.status || 'submitted',
     feedback: seed.feedback || '',
-    updatedAt: seed.updatedAt || null
+    updatedAt: seed.updatedAt || null,
+    auditionStatus: seed.auditionStatus || '',
+    auditionFeedback: seed.auditionFeedback || ''
   };
 }
 
@@ -185,6 +239,16 @@ function statusLabel(status) {
 
 function applicationStatusLabel(status) {
   return t(`applicationStatus.${status}`) || status;
+}
+
+function auditionStatusText(status) {
+  if (status === 'passed') return t('concerts.auditionResultPassed');
+  if (status === 'failed') return t('concerts.auditionResultFailed');
+  return t('concerts.auditionResultPending');
+}
+
+function auditionStatusClass(status) {
+  return `audition-status-${status || 'pending'}`;
 }
 
 function onFileChange(index, event) {
@@ -266,15 +330,45 @@ async function loadIdentity() {
 async function loadConcertDetails() {
   if (!auth.isAuthenticated) {
     resetApplicationForms();
+    loadingApplications.value = false;
     return;
   }
   if (!selectedConcertId.value) {
     resetApplicationForms();
+    loadingApplications.value = false;
     return;
   }
+  loadingApplications.value = true;
+  resetApplicationForms();
+  try {
+    const myApplicationsRes = await api.get(`/concerts/${selectedConcertId.value}/my-applications`);
+    const items = myApplicationsRes.data.items || [];
+    resetApplicationForms(items);
+  } catch (err) {
+    resetApplicationForms();
+    showError(err, t('concerts.loadDetailsFailed'));
+  } finally {
+    loadingApplications.value = false;
+  }
+}
 
-  const myApplicationsRes = await api.get(`/concerts/${selectedConcertId.value}/my-applications`);
-  resetApplicationForms(myApplicationsRes.data.items || []);
+async function loadAuditions() {
+  if (!selectedConcertId.value) {
+    auditions.value = [];
+    loadingAuditions.value = false;
+    return;
+  }
+  loadingAuditions.value = true;
+  auditions.value = [];
+  try {
+    const { data } = await api.get(`/concerts/${selectedConcertId.value}/auditions`);
+    auditions.value = data.items || [];
+  } catch (err) {
+    auditions.value = [];
+    showError(err, t('concerts.loadFailed'));
+  } finally {
+    loadingAuditions.value = false;
+  }
 }
 
 async function submitApplications() {
@@ -334,23 +428,21 @@ async function submitApplications() {
 
 watch(selectedConcertId, async () => {
   if (!auth.isAuthenticated) {
+    await loadAuditions();
     return;
   }
   try {
-    await loadConcertDetails();
+    await Promise.all([loadConcertDetails(), loadAuditions()]);
   } catch (err) {
     showError(err, t('concerts.loadDetailsFailed'));
   }
-});
+}, { immediate: true });
 
 onMounted(async () => {
   try {
     resetApplicationForms();
     await loadIdentity();
     await loadConcerts();
-    if (auth.isAuthenticated) {
-      await loadConcertDetails();
-    }
   } catch (err) {
     showError(err, t('concerts.loadFailed'));
   }
@@ -458,5 +550,46 @@ onMounted(async () => {
 
 .guest-apply-box {
   margin-top: 0.9rem;
+}
+
+.section-space {
+  margin-top: 1.25rem;
+}
+
+.audition-info {
+  margin-top: 0.6rem;
+}
+
+.audition-info h3 {
+  margin: 0 0 0.4rem;
+}
+
+.audition-results {
+  margin-top: 0.75rem;
+}
+
+.audition-result {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.audition-result + .audition-result {
+  margin-top: 0.6rem;
+}
+
+.audition-result p {
+  margin: 0.35rem 0 0;
+}
+
+.audition-status-pending {
+  color: var(--muted);
+}
+
+.audition-status-passed {
+  color: #4caf50;
+}
+
+.audition-status-failed {
+  color: var(--warn);
 }
 </style>

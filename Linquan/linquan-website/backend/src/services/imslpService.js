@@ -1,0 +1,260 @@
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import https from 'https';
+import path from 'path';
+import { URL } from 'url';
+import HttpError from '../utils/httpError.js';
+import { BING_SEARCH_KEY } from '../config/env.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROXY_SCRIPT = path.resolve(__dirname, '../../scripts/imslp_proxy.py');
+const PYTHON_CMD = process.env.PYTHON_PATH || 'python3';
+const DEFAULT_TIMEOUT_MS = 60000;
+
+// ---------------------------------------------------------------------------
+// In-memory cache for IMSLP person_detail and work_detail
+// ---------------------------------------------------------------------------
+const _personDetailCache = new Map();
+const PERSON_DETAIL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_PERSON_DETAIL_CACHE_SIZE = 200;
+
+function _makeCacheKey(action, args) {
+  return JSON.stringify({ action, args });
+}
+
+function _getCachedPersonDetail(key) {
+  const entry = _personDetailCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.time > PERSON_DETAIL_CACHE_TTL_MS) {
+    _personDetailCache.delete(key);
+    return null;
+  }
+  return structuredClone(entry.data);
+}
+
+function _setCachedPersonDetail(key, data) {
+  if (_personDetailCache.size >= MAX_PERSON_DETAIL_CACHE_SIZE) {
+    const firstKey = _personDetailCache.keys().next().value;
+    _personDetailCache.delete(firstKey);
+  }
+  _personDetailCache.set(key, { data: structuredClone(data), time: Date.now() });
+}
+
+const BING_API_HOST = 'api.bing.microsoft.com';
+const BING_API_PATH = '/v7.0/search';
+
+export function callImslp(action, args = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  // Check in-memory cache for person_detail and work_detail
+  if (action === 'person_detail' || action === 'work_detail') {
+    const cacheKey = _makeCacheKey(action, args);
+    const cached = _getCachedPersonDetail(cacheKey);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const input = JSON.stringify({ action, args });
+    const child = spawn(PYTHON_CMD, [PROXY_SCRIPT], {
+      timeout: timeoutMs,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdin.write(input);
+    child.stdin.end();
+
+    child.stdout.setEncoding('utf-8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+
+    child.stderr.setEncoding('utf-8');
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new HttpError(504, 'IMSLP request timed out. Please try again.'));
+    }, timeoutMs);
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (err.code === 'ETIMEDOUT' || err.code === 'ENOBUFS') {
+        reject(new HttpError(504, 'IMSLP request timed out. Please try again.'));
+      } else {
+        reject(new HttpError(502, `IMSLP proxy failed: ${err.message}`));
+      }
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        const detail = stderr.trim() || `Process exited with code ${code}`;
+        reject(new HttpError(502, `IMSLP proxy failed: ${detail}`));
+        return;
+      }
+
+      const trimmed = stdout.trim();
+      if (!trimmed) {
+        reject(new HttpError(502, 'IMSLP proxy returned empty output'));
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed.ok) {
+          reject(new HttpError(502, parsed.error || 'IMSLP proxy returned an error'));
+        } else {
+          // Cache successful person_detail and work_detail responses
+          if (action === 'person_detail' || action === 'work_detail') {
+            const cacheKey = _makeCacheKey(action, args);
+            _setCachedPersonDetail(cacheKey, parsed.data);
+          }
+          resolve(parsed.data);
+        }
+      } catch (err) {
+        reject(new HttpError(502, `Invalid response from IMSLP proxy: ${err.message}`));
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Optional Bing Web Search API integration for better IMSLP search coverage
+// (especially Chinese queries). Free tier: 1,000 transactions/month.
+// ---------------------------------------------------------------------------
+
+function _bingRequest(query, count = 20) {
+  return new Promise((resolve, reject) => {
+    const encoded = encodeURIComponent(query);
+    const url = new URL(`https://${BING_API_HOST}${BING_API_PATH}?q=${encoded}&count=${count}&mkt=en-US`);
+
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'Ocp-Apim-Subscription-Key': BING_SEARCH_KEY,
+          'User-Agent': 'LinquanBot/1.0',
+        },
+        timeout: 15000,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            reject(new Error(`Bing API returned ${res.statusCode}: ${body.slice(0, 200)}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (e) {
+            reject(new Error(`Invalid JSON from Bing: ${e.message}`));
+          }
+        });
+      }
+    );
+
+    req.on('error', (err) => reject(err));
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Bing API request timed out'));
+    });
+  });
+}
+
+const IMSLP_URL_RE = /^https?:\/\/imslp\.org\/wiki\/(.+)$/;
+
+function _extractImslpPermlink(url) {
+  try {
+    const m = url.match(IMSLP_URL_RE);
+    if (!m) return null;
+    let permlink = decodeURIComponent(m[1]);
+    // Strip Category: prefix for person pages
+    if (permlink.startsWith('Category:')) {
+      permlink = permlink.slice('Category:'.length);
+    }
+    return permlink;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search IMSLP via Bing Web Search API (site-scoped).
+ * Returns items in the same shape as the Python proxy: { items: [...] }
+ */
+export async function searchBingImslp(rawQuery, count = 20) {
+  if (!BING_SEARCH_KEY) {
+    return { items: [] };
+  }
+
+  const query = `site:imslp.org ${rawQuery}`;
+  const data = await _bingRequest(query, count);
+
+  const items = [];
+  const seen = new Set();
+
+  const webPages = data?.webPages?.value || [];
+  for (const page of webPages) {
+    const permlink = _extractImslpPermlink(page.url);
+    if (!permlink || seen.has(permlink)) continue;
+    seen.add(permlink);
+
+    // Try to extract work title / composer from the Bing snippet or title
+    const title = page.name || permlink.replace(/_/g, ' ');
+    const snippet = page.snippet || '';
+
+    // Composer heuristic: look for "(ComposerName, FirstName)" in title
+    const composerMatch = title.match(/\(([^,)]+,\s*[^)]+)\)$/);
+    const composer = composerMatch ? composerMatch[1].trim() : '';
+    const worktitle = composerMatch
+      ? title.slice(0, composerMatch.index).trim()
+      : title;
+
+    items.push({
+      id: title,
+      permlink,
+      intvals: {
+        worktitle,
+        composer,
+      },
+      __source: 'bing',
+      __snippet: snippet,
+    });
+  }
+
+  return { items };
+}
+
+/**
+ * Merge local-cache results with Bing results, deduplicating by permlink
+ * and keeping local results first (they have richer metadata).
+ */
+export function mergeSearchResults(localItems = [], bingItems = []) {
+  const seen = new Set();
+  const merged = [];
+
+  // Prefer local results first 
+  for (const item of localItems) {
+    const p = item.permlink;
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      merged.push(item);
+    }
+  }
+
+  // Append Bing results that are not already present
+  for (const item of bingItems) {
+    const p = item.permlink;
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      merged.push(item);
+    }
+  }
+
+  return merged;
+}

@@ -83,7 +83,28 @@
               <option value="direct">{{ t('classMatching.modeDirect') }}</option>
               <option value="ranking">{{ t('classMatching.modeRanking') }}</option>
             </select>
+            <p class="subtle mode-hint">
+              {{ t('classMatching.modeDirectHint') }}<br />
+              {{ t('classMatching.modeRankingHint') }}
+            </p>
           </div>
+        </div>
+
+        <div class="field" v-if="overview.effectiveCampus">
+          <label>{{ t('classMatching.campus') }}</label>
+          <p class="subtle">{{ t('classMatching.campusFromProfile', { campus: overview.effectiveCampus }) }}</p>
+        </div>
+        <div class="field" v-else-if="overview.needsCampusInput">
+          <label>{{ t('classMatching.campus') }}</label>
+          <select v-model="form.campus">
+            <option value="">{{ t('common.choose') }}</option>
+            <option value="仙林">{{ t('profile.campusXianlin') }}</option>
+            <option value="鼓楼">{{ t('profile.campusGulou') }}</option>
+            <option value="苏州">{{ t('profile.campusSuzhou') }}</option>
+            <option value="浦口">{{ t('profile.campusPukou') }}</option>
+            <option value="其它">{{ t('profile.campusOther') }}</option>
+          </select>
+          <p class="subtle">{{ t('classMatching.needsCampus') }}</p>
         </div>
 
         <div class="field" v-if="isStudent">
@@ -96,7 +117,37 @@
         </div>
         <div class="field" v-if="isStudent">
           <label>{{ t('classMatching.budgetExpectation') }}</label>
-          <input v-model.trim="form.budgetExpectation" :placeholder="t('classMatching.budgetPlaceholder')" />
+          <div class="row range-row">
+            <div class="field field-half">
+              <input type="number" min="0" v-model.number="form.budgetMin" :placeholder="t('classMatching.budgetMin')" />
+            </div>
+            <div class="field field-half">
+              <input type="number" min="0" v-model.number="form.budgetMax" :placeholder="t('classMatching.budgetMax')" />
+            </div>
+          </div>
+          <p class="subtle">{{ t('classMatching.budgetUnit') }}</p>
+        </div>
+
+        <div class="field" v-if="isStudent">
+          <label>{{ t('classMatching.studentSkillLevel') }}</label>
+          <div class="slider-wrap">
+            <input
+              type="range"
+              min="0"
+              max="19"
+              step="1"
+              v-model.number="form.studentSkillLevel"
+              class="range-slider"
+            />
+            <div class="range-ticks">
+              <span>0</span>
+              <span>5</span>
+              <span>10</span>
+              <span>15</span>
+              <span>19</span>
+            </div>
+          </div>
+          <p class="subtle">{{ skillLevelText(form.studentSkillLevel) }}</p>
         </div>
 
         <div class="field" v-if="isTeacher">
@@ -115,15 +166,56 @@
             :placeholder="t('classMatching.skillSpecializationPlaceholder')"
           />
         </div>
-        <div class="row" v-if="isTeacher">
-          <div class="field field-half">
-            <label>{{ t('classMatching.feeExpectation') }}</label>
-            <input v-model.trim="form.feeExpectation" :placeholder="t('classMatching.feePlaceholder')" />
+        <div class="field" v-if="isTeacher">
+          <label>{{ t('classMatching.feeExpectation') }}</label>
+          <div class="row range-row">
+            <div class="field field-half">
+              <input type="number" min="0" v-model.number="form.feeMin" :placeholder="t('classMatching.feeMin')" />
+            </div>
+            <div class="field field-half">
+              <input type="number" min="0" v-model.number="form.feeMax" :placeholder="t('classMatching.feeMax')" />
+            </div>
           </div>
-          <div class="field field-half">
-            <label>{{ t('classMatching.capacity') }}</label>
-            <input type="number" min="1" max="100" v-model.number="form.capacity" />
+          <p class="subtle">{{ t('classMatching.feeUnit') }}</p>
+        </div>
+        <div class="field" v-if="isTeacher">
+          <label>{{ t('classMatching.capacity') }}</label>
+          <input type="number" min="1" max="100" v-model.number="form.capacity" />
+        </div>
+
+        <div class="field" v-if="isTeacher">
+          <label>{{ t('classMatching.teacherSkillRange') }}</label>
+          <div class="slider-wrap dual-slider">
+            <input
+              type="range"
+              min="0"
+              max="19"
+              step="1"
+              v-model.number="form.teacherSkillMin"
+              class="range-slider"
+            />
+            <input
+              type="range"
+              min="0"
+              max="19"
+              step="1"
+              v-model.number="form.teacherSkillMax"
+              class="range-slider"
+            />
+            <div class="range-ticks">
+              <span>0</span>
+              <span>5</span>
+              <span>10</span>
+              <span>15</span>
+              <span>19</span>
+            </div>
           </div>
+          <p class="subtle">
+            {{ t('classMatching.teacherSkillRangeText', {
+              min: skillLevelText(form.teacherSkillMin),
+              max: skillLevelText(form.teacherSkillMax)
+            }) }}
+          </p>
         </div>
 
         <div class="field" v-if="form.matchingMode === 'direct'">
@@ -332,14 +424,22 @@ const overview = reactive({
 const form = reactive({
   participantType: 'student',
   matchingMode: 'ranking',
+  campus: '',
   skillLevel: '',
   learningGoals: '',
   budgetExpectation: '',
+  budgetMin: null,
+  budgetMax: null,
   teachingExperience: '',
   skillSpecialization: '',
   feeExpectation: '',
+  feeMin: null,
+  feeMax: null,
   capacity: 1,
-  directTargetUserId: 0
+  directTargetUserId: 0,
+  studentSkillLevel: 0,
+  teacherSkillMin: 0,
+  teacherSkillMax: 19
 });
 
 const availabilitySlotIds = ref([]);
@@ -392,14 +492,22 @@ const preferenceSubtitle = computed(() =>
 function resetForm(profile = null) {
   form.participantType = profile?.participantType || 'student';
   form.matchingMode = profile?.matchingMode || 'ranking';
+  form.campus = profile?.campus || '';
   form.skillLevel = profile?.skillLevel || '';
   form.learningGoals = profile?.learningGoals || '';
   form.budgetExpectation = profile?.budgetExpectation || '';
+  form.budgetMin = profile?.budgetMin ?? null;
+  form.budgetMax = profile?.budgetMax ?? null;
   form.teachingExperience = profile?.teachingExperience || '';
   form.skillSpecialization = profile?.skillSpecialization || '';
   form.feeExpectation = profile?.feeExpectation || '';
+  form.feeMin = profile?.feeMin ?? null;
+  form.feeMax = profile?.feeMax ?? null;
   form.capacity = Number(profile?.capacity || 1);
   form.directTargetUserId = Number(profile?.directTargetUserId || 0);
+  form.studentSkillLevel = profile?.studentSkillLevel ?? 0;
+  form.teacherSkillMin = profile?.teacherSkillMin ?? 0;
+  form.teacherSkillMax = profile?.teacherSkillMax ?? 19;
 }
 
 function slotAt(day, hour) {
@@ -474,6 +582,32 @@ function formatScore(value) {
   return Number(value || 0).toFixed(1);
 }
 
+function skillLevelText(level) {
+  const labels = [
+    t('classMatching.skillLabel0'),
+    t('classMatching.skillLabel1'),
+    t('classMatching.skillLabel2'),
+    t('classMatching.skillLabel3'),
+    t('classMatching.skillLabel4'),
+    t('classMatching.skillLabel5'),
+    t('classMatching.skillLabel6'),
+    t('classMatching.skillLabel7'),
+    t('classMatching.skillLabel8'),
+    t('classMatching.skillLabel9'),
+    t('classMatching.skillLabel10'),
+    t('classMatching.skillLabel11'),
+    t('classMatching.skillLabel12'),
+    t('classMatching.skillLabel13'),
+    t('classMatching.skillLabel14'),
+    t('classMatching.skillLabel15'),
+    t('classMatching.skillLabel16'),
+    t('classMatching.skillLabel17'),
+    t('classMatching.skillLabel18'),
+    t('classMatching.skillLabel19')
+  ];
+  return labels[Math.max(0, Math.min(19, Number(level || 0)))] || String(level);
+}
+
 async function loadTerms() {
   loadingTerms.value = true;
   try {
@@ -542,14 +676,22 @@ async function saveProfile() {
       termId: selectedTermId.value,
       participantType: form.participantType,
       matchingMode: form.matchingMode,
+      campus: form.campus || null,
       skillLevel: isStudent.value ? form.skillLevel : null,
       learningGoals: isStudent.value ? form.learningGoals : null,
       budgetExpectation: isStudent.value ? form.budgetExpectation : null,
+      budgetMin: isStudent.value ? (form.budgetMin === '' ? null : Number(form.budgetMin)) : null,
+      budgetMax: isStudent.value ? (form.budgetMax === '' ? null : Number(form.budgetMax)) : null,
       teachingExperience: isTeacher.value ? form.teachingExperience : null,
       skillSpecialization: isTeacher.value ? form.skillSpecialization : null,
       feeExpectation: isTeacher.value ? form.feeExpectation : null,
+      feeMin: isTeacher.value ? (form.feeMin === '' ? null : Number(form.feeMin)) : null,
+      feeMax: isTeacher.value ? (form.feeMax === '' ? null : Number(form.feeMax)) : null,
       capacity: isTeacher.value ? Number(form.capacity || 1) : null,
-      directTargetUserId: form.matchingMode === 'direct' ? Number(form.directTargetUserId || 0) || null : null
+      directTargetUserId: form.matchingMode === 'direct' ? Number(form.directTargetUserId || 0) || null : null,
+      studentSkillLevel: isStudent.value ? Number(form.studentSkillLevel ?? 0) : null,
+      teacherSkillMin: isTeacher.value ? Number(form.teacherSkillMin ?? 0) : null,
+      teacherSkillMax: isTeacher.value ? Number(form.teacherSkillMax ?? 19) : null
     });
     showSuccess(t('classMatching.profileSaved'));
     await loadOverview();
@@ -625,6 +767,24 @@ watch(
       return;
     }
     rankingTargetUserIds.value = rankingTargetUserIds.value.filter((item) => rankingCandidateMap.value.has(item));
+  }
+);
+
+watch(
+  () => form.teacherSkillMin,
+  (val) => {
+    if (Number(val) > Number(form.teacherSkillMax)) {
+      form.teacherSkillMax = Number(val);
+    }
+  }
+);
+
+watch(
+  () => form.teacherSkillMax,
+  (val) => {
+    if (Number(val) < Number(form.teacherSkillMin)) {
+      form.teacherSkillMin = Number(val);
+    }
   }
 );
 
@@ -809,6 +969,33 @@ onMounted(async () => {
 
 .multiline-text {
   white-space: pre-wrap;
+}
+
+.mode-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+}
+
+.range-row {
+  align-items: flex-end;
+}
+
+.slider-wrap {
+  margin-top: 0.2rem;
+}
+
+.dual-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.range-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0 0.25rem;
 }
 
 @media (max-width: 960px) {

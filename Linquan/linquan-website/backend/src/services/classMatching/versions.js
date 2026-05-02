@@ -319,17 +319,56 @@ export function exportVersionCsv(termId, versionId = null) {
       .join(',')
   );
   lines.push(
-    ['学生学号', '学生姓名', '教师学号', '教师姓名', '匹配类型', '匹配分数', '状态', '备注', '管理员说明']
+    ['学生学号', '学生姓名', '学生校区', '学生水平', '学生预算', '教师学号', '教师姓名', '教师校区', '教师可教范围', '教师课费', '匹配类型', '匹配分数', '状态', '备注', '管理员说明']
       .map(escapeCsv)
       .join(',')
   );
+
+  const profileMap = new Map();
+  const profileRows = db.prepare(
+    `SELECT
+       cmp.user_id AS "userId",
+       COALESCE(p.campus, cmp.campus) AS "campus",
+       cmp.student_skill_level AS "studentSkillLevel",
+       cmp.teacher_skill_min AS "teacherSkillMin",
+       cmp.teacher_skill_max AS "teacherSkillMax",
+       cmp.budget_min AS "budgetMin",
+       cmp.budget_max AS "budgetMax",
+       cmp.fee_min AS "feeMin",
+       cmp.fee_max AS "feeMax"
+     FROM class_matching_profiles cmp
+     LEFT JOIN profiles p ON p.user_id = cmp.user_id
+     WHERE cmp.term_id = ?`
+  ).all(termId);
+  for (const row of profileRows) {
+    profileMap.set(row.userId, row);
+  }
+
   for (const item of matches) {
+    const studentProfile = profileMap.get(item.studentUserId) || {};
+    const teacherProfile = profileMap.get(item.teacherUserId) || {};
+    const studentSkillText = studentProfile.studentSkillLevel != null ? String(studentProfile.studentSkillLevel) : '';
+    const studentBudgetText = (studentProfile.budgetMin != null && studentProfile.budgetMax != null)
+      ? `${studentProfile.budgetMin}-${studentProfile.budgetMax}`
+      : '';
+    const teacherSkillText = (teacherProfile.teacherSkillMin != null && teacherProfile.teacherSkillMax != null)
+      ? `${teacherProfile.teacherSkillMin}-${teacherProfile.teacherSkillMax}`
+      : '';
+    const teacherFeeText = (teacherProfile.feeMin != null && teacherProfile.feeMax != null)
+      ? `${teacherProfile.feeMin}-${teacherProfile.feeMax}`
+      : '';
     lines.push(
       [
         item.studentNumber,
         item.studentName,
+        studentProfile.campus || '',
+        studentSkillText,
+        studentBudgetText,
         item.teacherNumber,
         item.teacherName,
+        teacherProfile.campus || '',
+        teacherSkillText,
+        teacherFeeText,
         item.matchType,
         item.matchingScore,
         item.status,

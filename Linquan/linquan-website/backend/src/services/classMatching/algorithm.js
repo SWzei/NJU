@@ -41,13 +41,61 @@ export function loadMatchingContext(termId) {
 }
 
 export function computeCompatibilityScore(studentUserId, teacherUserId, context) {
+  const studentProfile = context.profileByUserId.get(studentUserId);
+  const teacherProfile = context.profileByUserId.get(teacherUserId);
+
+  // Campus hard constraint: Suzhou cannot match non-Suzhou
+  const studentCampus = studentProfile?.campus || null;
+  const teacherCampus = teacherProfile?.campus || null;
+  if (studentCampus && teacherCampus) {
+    const isStudentSuzhou = studentCampus === '苏州';
+    const isTeacherSuzhou = teacherCampus === '苏州';
+    if (isStudentSuzhou !== isTeacherSuzhou) {
+      return -Infinity;
+    }
+  }
+
   const overlap = computeOverlapCount(studentUserId, teacherUserId, context.availabilityMap);
   const studentRank = context.rankingIndex.get(studentUserId)?.get(teacherUserId) || null;
   const teacherRank = context.rankingIndex.get(teacherUserId)?.get(studentUserId) || null;
   const studentScore = studentRank ? Math.max(0, 48 - (studentRank - 1) * 6) : 0;
   const teacherScore = teacherRank ? Math.max(0, 32 - (teacherRank - 1) * 4) : 0;
   const overlapScore = Math.min(overlap, 12) * 4;
-  return overlapScore + studentScore + teacherScore;
+
+  // Campus bonus: same campus +30
+  let campusScore = 0;
+  if (studentCampus && teacherCampus && studentCampus === teacherCampus) {
+    campusScore = 30;
+  }
+
+  // Fee overlap score
+  let feeScore = 0;
+  const sMin = studentProfile?.budgetMin;
+  const sMax = studentProfile?.budgetMax;
+  const tMin = teacherProfile?.feeMin;
+  const tMax = teacherProfile?.feeMax;
+  if (sMin != null && sMax != null && tMin != null && tMax != null) {
+    const overlapStart = Math.max(Number(sMin), Number(tMin));
+    const overlapEnd = Math.min(Number(sMax), Number(tMax));
+    if (overlapEnd >= overlapStart) {
+      const overlapLen = overlapEnd - overlapStart;
+      feeScore = Math.min(overlapLen, 50) * 1.5;
+    }
+  }
+
+  // Skill level compatibility score
+  let skillScore = 0;
+  const ssl = studentProfile?.studentSkillLevel;
+  const tmin = teacherProfile?.teacherSkillMin;
+  const tmax = teacherProfile?.teacherSkillMax;
+  if (ssl != null && tmin != null && tmax != null) {
+    const level = Number(ssl);
+    if (level >= Number(tmin) && level <= Number(tmax)) {
+      skillScore = 40;
+    }
+  }
+
+  return overlapScore + studentScore + teacherScore + campusScore + feeScore + skillScore;
 }
 
 export function buildLockedPairs(context, fixedMatchesByStudent = new Map(), fixedCountsByTeacher = new Map()) {
@@ -71,6 +119,10 @@ export function buildLockedPairs(context, fixedMatchesByStudent = new Map(), fix
       continue;
     }
     if (teacher.qualificationStatus !== 'approved') {
+      continue;
+    }
+    // Campus hard constraint for locked pairs
+    if (computeCompatibilityScore(student.userId, teacher.userId, context) === -Infinity) {
       continue;
     }
     const currentCount = usedTeachers.get(teacher.userId) || 0;
@@ -109,7 +161,9 @@ function buildOrderedCandidateList(ownerUserId, candidateIds, context) {
     }
   }
 
-  const remaining = [...candidateIds].filter((id) => !rankedSet.has(id));
+  const remaining = [...candidateIds]
+    .filter((id) => !rankedSet.has(id))
+    .filter((id) => computeCompatibilityScore(ownerUserId, id, context) !== -Infinity);
   remaining.sort((left, right) => {
     const scoreDiff = computeCompatibilityScore(ownerUserId, right, context) - computeCompatibilityScore(ownerUserId, left, context);
     if (scoreDiff !== 0) {

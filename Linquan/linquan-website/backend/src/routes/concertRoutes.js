@@ -194,6 +194,8 @@ function loadUserConcertApplications(concertId, userId) {
          note,
          status,
          feedback,
+         audition_status AS auditionStatus,
+         audition_feedback AS auditionFeedback,
          created_at AS createdAt,
          updated_at AS updatedAt
        FROM concert_applications
@@ -230,6 +232,49 @@ router.get('/concerts', (req, res) => {
     );
 
   res.json({ items: rows });
+});
+
+router.get('/concerts/:concertId/auditions', (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           title,
+           description,
+           announcement,
+           audition_time AS auditionTime,
+           status,
+           attachment_path AS attachmentPath,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_auditions
+         WHERE concert_id = ? AND status != 'draft'
+         ORDER BY created_at DESC, id DESC`
+      )
+      .all(concertId)
+      .map((item) =>
+        serializePublishingTimestamps({
+          ...item,
+          attachmentPath: toPublicPath(item.attachmentPath)
+        })
+      );
+
+    res.json({ items: rows });
+  } catch (err) {
+    return next(err);
+  }
 });
 
 router.post(

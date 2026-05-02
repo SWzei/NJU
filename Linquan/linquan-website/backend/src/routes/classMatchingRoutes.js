@@ -39,14 +39,22 @@ const profileSchema = z.object({
   termId: z.number().int().positive().optional(),
   participantType: z.enum(['student', 'teacher']).optional(),
   matchingMode: z.enum(['direct', 'ranking']).optional(),
+  campus: z.enum(['仙林', '鼓楼', '苏州', '浦口', '其它']).optional().nullable(),
   skillLevel: z.string().trim().max(1000).optional().nullable(),
   learningGoals: z.string().trim().max(1000).optional().nullable(),
   budgetExpectation: z.string().trim().max(128).optional().nullable(),
+  budgetMin: z.number().int().min(0).optional().nullable(),
+  budgetMax: z.number().int().min(0).optional().nullable(),
   teachingExperience: z.string().trim().max(1000).optional().nullable(),
   skillSpecialization: z.string().trim().max(1000).optional().nullable(),
   feeExpectation: z.string().trim().max(128).optional().nullable(),
+  feeMin: z.number().int().min(0).optional().nullable(),
+  feeMax: z.number().int().min(0).optional().nullable(),
   capacity: z.number().int().positive().max(100).optional().nullable(),
-  directTargetUserId: z.number().int().positive().optional().nullable()
+  directTargetUserId: z.number().int().positive().optional().nullable(),
+  studentSkillLevel: z.number().int().min(0).max(19).optional().nullable(),
+  teacherSkillMin: z.number().int().min(0).max(19).optional().nullable(),
+  teacherSkillMax: z.number().int().min(0).max(19).optional().nullable()
 });
 
 const availabilitySchema = z.object({
@@ -114,14 +122,22 @@ router.put('/class-matching/profile', (req, res, next) => {
       termId: optionalNumber(req.body.termId),
       participantType: req.body.participantType,
       matchingMode: req.body.matchingMode,
+      campus: req.body.campus ?? undefined,
       skillLevel: req.body.skillLevel ?? undefined,
       learningGoals: req.body.learningGoals ?? undefined,
       budgetExpectation: req.body.budgetExpectation ?? undefined,
+      budgetMin: optionalNumber(req.body.budgetMin),
+      budgetMax: optionalNumber(req.body.budgetMax),
       teachingExperience: req.body.teachingExperience ?? undefined,
       skillSpecialization: req.body.skillSpecialization ?? undefined,
       feeExpectation: req.body.feeExpectation ?? undefined,
+      feeMin: optionalNumber(req.body.feeMin),
+      feeMax: optionalNumber(req.body.feeMax),
       capacity: optionalNumber(req.body.capacity),
-      directTargetUserId: optionalNumber(req.body.directTargetUserId)
+      directTargetUserId: optionalNumber(req.body.directTargetUserId),
+      studentSkillLevel: optionalNumber(req.body.studentSkillLevel),
+      teacherSkillMin: optionalNumber(req.body.teacherSkillMin),
+      teacherSkillMax: optionalNumber(req.body.teacherSkillMax)
     });
     const termId = resolveClassMatchingTermId(db, parsed.termId);
     const profile = saveUserClassMatchingProfile({ termId, userId: req.user.id, input: parsed });

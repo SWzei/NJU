@@ -58,7 +58,8 @@ const profileUpdateSchema = z.object({
   hobbies: z.string().max(512).optional(),
   pianoInterests: z.string().max(512).optional(),
   wechatAccount: z.string().max(64).optional(),
-  phone: z.string().max(32).optional()
+  phone: z.string().max(32).optional(),
+  campus: z.enum(['仙林', '鼓楼', '苏州', '浦口', '其它']).optional().nullable()
 });
 
 router.get('/profiles', (req, res) => {
@@ -76,7 +77,8 @@ router.get('/profiles', (req, res) => {
          p.academy,
          p.hobbies,
          p.piano_interests AS "pianoInterests",
-         p.wechat_account AS "wechatAccount"
+         p.wechat_account AS "wechatAccount",
+         p.campus
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
        WHERE u.role = 'member' AND u.is_active = 1
@@ -105,7 +107,8 @@ router.get('/profiles/me', authenticate, (req, res) => {
          p.hobbies,
          p.piano_interests AS "pianoInterests",
          p.wechat_account AS "wechatAccount",
-         p.phone
+         p.phone,
+         p.campus
        FROM users u
        LEFT JOIN profiles p ON p.user_id = u.id
        WHERE u.id = ? AND u.is_active = 1`
@@ -138,6 +141,7 @@ router.get('/profiles/:userId(\\d+)', authenticate, (req, res, next) => {
            p.piano_interests AS "pianoInterests",
            p.wechat_account AS "wechatAccount",
            p.phone,
+           p.campus,
            p.updated_at AS "updatedAt"
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
@@ -215,7 +219,8 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
            hobbies,
            piano_interests,
            wechat_account,
-           phone
+           phone,
+           campus
          FROM profiles
          WHERE user_id = ?`
       )
@@ -254,7 +259,10 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
         : current?.wechat_account || null,
       phone: Object.prototype.hasOwnProperty.call(input, 'phone')
         ? input.phone
-        : current?.phone || null
+        : current?.phone || null,
+      campus: Object.prototype.hasOwnProperty.call(input, 'campus')
+        ? input.campus
+        : current?.campus || null
     };
 
     db.prepare(
@@ -271,6 +279,7 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
          piano_interests = ?,
          wechat_account = ?,
          phone = ?,
+         campus = ?,
          updated_at = CURRENT_TIMESTAMP
        WHERE user_id = ?`
     ).run(
@@ -285,6 +294,7 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
       nextProfile.pianoInterests,
       nextProfile.wechatAccount,
       nextProfile.phone,
+      nextProfile.campus,
       req.user.id
     );
 
@@ -304,7 +314,8 @@ router.put('/profiles/me', authenticate, (req, res, next) => {
            p.hobbies,
            p.piano_interests AS "pianoInterests",
            p.wechat_account AS "wechatAccount",
-           p.phone
+           p.phone,
+           p.campus
          FROM users u
          LEFT JOIN profiles p ON p.user_id = u.id
          WHERE u.id = ?`

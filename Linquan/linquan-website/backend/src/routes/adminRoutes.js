@@ -34,6 +34,10 @@ const concertUploadDir = path.join(uploadRoot, 'concerts');
 if (!fs.existsSync(concertUploadDir)) {
   fs.mkdirSync(concertUploadDir, { recursive: true });
 }
+const auditionUploadDir = path.join(uploadRoot, 'auditions');
+if (!fs.existsSync(auditionUploadDir)) {
+  fs.mkdirSync(auditionUploadDir, { recursive: true });
+}
 const activityUploadDir = path.join(uploadRoot, 'activities');
 if (!fs.existsSync(activityUploadDir)) {
   fs.mkdirSync(activityUploadDir, { recursive: true });
@@ -54,6 +58,20 @@ const concertUpload = multer({
       normalizeUploadedFileMeta(file);
       const ext = path.extname(file.originalname || '').toLowerCase();
       cb(null, `concert-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
+    }
+  }),
+  limits: {
+    fileSize: 20 * 1024 * 1024
+  }
+});
+
+const auditionUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, auditionUploadDir),
+    filename: (req, file, cb) => {
+      normalizeUploadedFileMeta(file);
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      cb(null, `audition-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext || '.bin'}`);
     }
   }),
   limits: {
@@ -236,6 +254,9 @@ function toPublicPath(rawPath) {
     return `/${normalized}`;
   }
   if (normalized.startsWith('concerts/')) {
+    return `/uploads/${normalized}`;
+  }
+  if (normalized.startsWith('auditions/')) {
     return `/uploads/${normalized}`;
   }
   return `/${normalized}`;
@@ -468,6 +489,16 @@ function serializeConcertApplicationItem(item) {
   return serializePublishingTimestamps({
     ...item,
     scoreFilePath: toPublicPath(item.scoreFilePath)
+  });
+}
+
+function serializeAuditionItem(item) {
+  if (!item) {
+    return item;
+  }
+  return serializePublishingTimestamps({
+    ...item,
+    attachmentPath: toPublicPath(item.attachmentPath)
   });
 }
 
@@ -887,6 +918,48 @@ const updateConcertSchema = z.object({
 
 const releaseConcertSchema = z.object({
   message: z.string().max(5000).nullable().optional()
+});
+
+const createAuditionSchema = z.object({
+  title: requiredTrimmedString(2, 200),
+  description: nullableTrimmedString(5000),
+  announcement: nullableTrimmedString(5000),
+  auditionTime: nullableDateTimeString(),
+  status: trimmedStatus('draft')
+});
+
+const updateAuditionSchema = z.object({
+  title: optionalTrimmedString(200).refine((value) => value === undefined || value.length >= 2, {
+    message: 'Title must be at least 2 characters'
+  }),
+  description: nullableTrimmedString(5000),
+  announcement: nullableTrimmedString(5000),
+  auditionTime: nullableDateTimeString(),
+  status: z.preprocess((value) => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const normalized = normalizeTrimmed(value);
+    return normalized === '' ? undefined : normalized;
+  }, z.enum(['draft', 'open', 'closed']).optional()),
+  removeAttachment: z.boolean().optional()
+});
+
+const releaseAuditionSchema = z.object({
+  message: z.string().max(5000).nullable().optional()
+});
+
+const updateApplicationAuditionSchema = z.object({
+  auditionStatus: z.enum(['pending', 'passed', 'failed']),
+  auditionFeedback: z.string().max(5000).optional()
+}).refine((data) => {
+  if (data.auditionStatus === 'failed') {
+    return typeof data.auditionFeedback === 'string' && data.auditionFeedback.trim().length > 0;
+  }
+  return true;
+}, {
+  message: 'Feedback is required when audition status is failed',
+  path: ['auditionFeedback']
 });
 
 const createGalleryItemSchema = z.object({
@@ -3339,13 +3412,23 @@ router.delete('/admin/concerts/:concertId', async (req, res, next) => {
       .map((item) => item.scoreFilePath)
       .filter(Boolean);
 
+    const auditionFiles = db
+      .prepare(
+        `SELECT attachment_path AS attachmentPath
+         FROM concert_auditions
+         WHERE concert_id = ? AND attachment_path IS NOT NULL`
+      )
+      .all(concertId)
+      .map((item) => item.attachmentPath)
+      .filter(Boolean);
+
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM concert_applications WHERE concert_id = ?').run(concertId);
       db.prepare('DELETE FROM concerts WHERE id = ?').run(concertId);
     });
     tx();
 
-    const filesToDelete = [existing.attachmentPath, ...applicationFiles].filter(Boolean);
+    const filesToDelete = [existing.attachmentPath, ...applicationFiles, ...auditionFiles].filter(Boolean);
     for (const filePath of filesToDelete) {
       try {
         removeManagedUploadFile(filePath);
@@ -3392,6 +3475,8 @@ router.get('/admin/concerts/:concertId/applications', (req, res, next) => {
            ca.score_file_path AS scoreFilePath,
            ca.status,
            ca.feedback,
+           ca.audition_status AS auditionStatus,
+           ca.audition_feedback AS auditionFeedback,
            ca.created_at AS createdAt,
            ca.updated_at AS updatedAt
          FROM concert_applications ca
@@ -3574,6 +3659,738 @@ router.post('/admin/concerts/:concertId/release', async (req, res, next) => {
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid release payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.get('/admin/concerts/:concertId/auditions', (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           title,
+           description,
+           announcement,
+           audition_time AS auditionTime,
+           status,
+           attachment_path AS attachmentPath,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_auditions
+         WHERE concert_id = ?
+         ORDER BY created_at DESC, id DESC`
+      )
+      .all(concertId)
+      .map(serializeAuditionItem);
+
+    res.json({ items: rows });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/admin/concerts/:concertId/auditions', auditionUpload.single('attachmentFile'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const input = createAuditionSchema.parse({
+      title: req.body.title,
+      description: req.body.description,
+      announcement: req.body.announcement,
+      auditionTime: req.body.auditionTime,
+      status: req.body.status
+    });
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const attachmentPath = req.file ? toStoredUploadPath(req.file.path) : null;
+    const normalizedAuditionTime = normalizePublishingEventTimeInput(input.auditionTime);
+
+    const result = db
+      .prepare(
+        `INSERT INTO concert_auditions (
+           concert_id, title, description, announcement, audition_time, status, attachment_path, created_by
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        concertId,
+        input.title,
+        input.description ?? null,
+        input.announcement ?? null,
+        normalizedAuditionTime,
+        input.status,
+        attachmentPath,
+        req.user.id
+      );
+
+    const auditionId = Number(result.lastInsertRowid);
+    const created = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           title,
+           description,
+           announcement,
+           audition_time AS auditionTime,
+           status,
+           attachment_path AS attachmentPath,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_auditions
+         WHERE id = ?`
+      )
+      .get(auditionId);
+
+    res.status(201).json(serializeAuditionItem(created));
+  } catch (err) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid audition payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.patch('/admin/concerts/:concertId/auditions/:auditionId', auditionUpload.single('attachmentFile'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    const auditionId = Number(req.params.auditionId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+    if (!Number.isInteger(auditionId) || auditionId <= 0) {
+      throw new HttpError(400, 'Invalid auditionId');
+    }
+
+    const input = updateAuditionSchema.parse({
+      title: req.body.title,
+      description: req.body.description,
+      announcement: req.body.announcement,
+      auditionTime: req.body.auditionTime,
+      status: req.body.status,
+      removeAttachment: optionalBoolean(req.body.removeAttachment)
+    });
+
+    const existing = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           title,
+           description,
+           announcement,
+           audition_time AS auditionTime,
+           status,
+           attachment_path AS attachmentPath
+         FROM concert_auditions
+         WHERE id = ? AND concert_id = ?`
+      )
+      .get(auditionId, concertId);
+    if (!existing) {
+      throw new HttpError(404, 'Audition not found');
+    }
+
+    const nextAttachmentPath = req.file
+      ? toStoredUploadPath(req.file.path)
+      : input.removeAttachment
+        ? null
+        : existing.attachmentPath;
+    const nextAuditionTime =
+      input.auditionTime === undefined
+        ? existing.auditionTime
+        : normalizePublishingEventTimeInput(input.auditionTime);
+    const replacedAttachmentPath =
+      req.file && existing.attachmentPath && existing.attachmentPath !== nextAttachmentPath
+        ? existing.attachmentPath
+        : !req.file && input.removeAttachment && existing.attachmentPath
+          ? existing.attachmentPath
+          : null;
+
+    const result = db
+      .prepare(
+        `UPDATE concert_auditions
+         SET
+           title = ?,
+           description = ?,
+           announcement = ?,
+           audition_time = ?,
+           status = ?,
+           attachment_path = ?,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .run(
+        input.title ?? existing.title,
+        input.description === undefined ? existing.description : input.description,
+        input.announcement === undefined ? existing.announcement : input.announcement,
+        nextAuditionTime,
+        input.status ?? existing.status,
+        nextAttachmentPath,
+        auditionId
+      );
+    if (result.changes === 0) {
+      throw new HttpError(404, 'Audition not found');
+    }
+
+    const updated = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           title,
+           description,
+           announcement,
+           audition_time AS auditionTime,
+           status,
+           attachment_path AS attachmentPath,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_auditions
+         WHERE id = ?`
+      )
+      .get(auditionId);
+
+    if (replacedAttachmentPath) {
+      removeManagedUploadFile(replacedAttachmentPath);
+    }
+
+    res.json(serializeAuditionItem(updated));
+  } catch (err) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid audition update payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.delete('/admin/concerts/:concertId/auditions/:auditionId', async (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    const auditionId = Number(req.params.auditionId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+    if (!Number.isInteger(auditionId) || auditionId <= 0) {
+      throw new HttpError(400, 'Invalid auditionId');
+    }
+
+    const existing = db
+      .prepare(
+        `SELECT
+           id,
+           attachment_path AS attachmentPath
+         FROM concert_auditions
+         WHERE id = ? AND concert_id = ?`
+      )
+      .get(auditionId, concertId);
+    if (!existing) {
+      throw new HttpError(404, 'Audition not found');
+    }
+
+    db.prepare('DELETE FROM concert_auditions WHERE id = ?').run(auditionId);
+
+    if (existing.attachmentPath) {
+      try {
+        removeManagedUploadFile(existing.attachmentPath);
+      } catch (fileErr) {
+        console.warn('Failed to delete audition attachment:', fileErr);
+      }
+    }
+
+    res.json({ message: 'Audition deleted successfully', concertId, auditionId });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/admin/concerts/:concertId/auditions/:auditionId/release', async (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    const auditionId = Number(req.params.auditionId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+    if (!Number.isInteger(auditionId) || auditionId <= 0) {
+      throw new HttpError(400, 'Invalid auditionId');
+    }
+
+    const input = releaseAuditionSchema.parse({
+      message: optionalString(req.body.message)
+    });
+
+    const audition = db
+      .prepare(
+        `SELECT
+           id, concert_id AS concertId, title, description, announcement
+         FROM concert_auditions
+         WHERE id = ? AND concert_id = ?`
+      )
+      .get(auditionId, concertId);
+    if (!audition) {
+      throw new HttpError(404, 'Audition not found');
+    }
+
+    db.prepare(
+      `UPDATE concert_auditions
+       SET status = 'open', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(auditionId);
+
+    const applicantRows = db
+      .prepare(
+        `SELECT DISTINCT user_id AS userId
+         FROM concert_applications
+         WHERE concert_id = ?`
+      )
+      .all(concertId);
+    const applicantIds = applicantRows.map((row) => row.userId).filter(Boolean);
+
+    let notifyResult = { sent: 0, failed: 0 };
+    if (applicantIds.length > 0) {
+      notifyResult = await notifyUsers({
+        userIds: applicantIds,
+        subject: `[NJU林泉钢琴社音乐会审核通知] ${audition.title}`,
+        content:
+          input.message
+          || audition.announcement
+          || audition.description
+          || '新的音乐会审核通知已发布，请登录查看详情。',
+        relatedType: 'concert_audition',
+        relatedId: auditionId
+      });
+    }
+
+    res.json({
+      message: 'Audition released',
+      auditionId,
+      status: 'open',
+      notification: notifyResult
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid release payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.patch('/admin/concerts/:concertId/applications/:applicationId/audition', (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    const applicationId = Number(req.params.applicationId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+    if (!Number.isInteger(applicationId) || applicationId <= 0) {
+      throw new HttpError(400, 'Invalid applicationId');
+    }
+
+    const input = updateApplicationAuditionSchema.parse({
+      auditionStatus: req.body.auditionStatus,
+      auditionFeedback: req.body.auditionFeedback
+    });
+
+    const application = db
+      .prepare(
+        `SELECT id
+         FROM concert_applications
+         WHERE id = ? AND concert_id = ?`
+      )
+      .get(applicationId, concertId);
+    if (!application) {
+      throw new HttpError(404, 'Concert application not found');
+    }
+
+    db.prepare(
+      `UPDATE concert_applications
+       SET
+         audition_status = ?,
+         audition_feedback = ?,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      input.auditionStatus,
+      input.auditionFeedback ?? null,
+      applicationId
+    );
+
+    const updated = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.concert_id AS concertId,
+           ca.user_id AS userId,
+           u.student_number AS studentNumber,
+           COALESCE(p.display_name, u.student_number) AS displayName,
+           ca.applicant_name AS applicantName,
+           ca.applicant_student_number AS applicantStudentNumber,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           ca.contact_qq AS contactQq,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceTitle,
+           COALESCE(ca.piece_en, ca.composer) AS composer,
+           ca.note,
+           ca.score_file_path AS scoreFilePath,
+           ca.status,
+           ca.feedback,
+           ca.audition_status AS auditionStatus,
+           ca.audition_feedback AS auditionFeedback,
+           ca.created_at AS createdAt,
+           ca.updated_at AS updatedAt
+         FROM concert_applications ca
+         JOIN users u ON u.id = ca.user_id
+         LEFT JOIN profiles p ON p.user_id = u.id
+         WHERE ca.id = ?`
+      )
+      .get(applicationId);
+
+    res.json(serializeConcertApplicationItem(updated));
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid audition result payload', details: err.issues });
+    }
+    return next(err);
+  }
+});
+
+router.get('/admin/concerts/:concertId/program-arrangement', authenticate, requireRole('admin'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const segments = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           name,
+           display_order AS displayOrder,
+           rest_after_min AS restAfterMin,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_segments
+         WHERE concert_id = ?
+         ORDER BY display_order ASC, id ASC`
+      )
+      .all(concertId)
+      .map((s) => serializePublishingTimestamps(s));
+
+    const items = db
+      .prepare(
+        `SELECT
+           cpi.id,
+           cpi.concert_id AS concertId,
+           cpi.segment_id AS segmentId,
+           cpi.application_id AS applicationId,
+           cpi.display_order AS displayOrder,
+           cpi.interval_before_min AS intervalBeforeMin,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           cpi.created_at AS createdAt,
+           cpi.updated_at AS updatedAt
+         FROM concert_program_items cpi
+         JOIN concert_applications ca ON ca.id = cpi.application_id
+         WHERE cpi.concert_id = ?
+         ORDER BY cpi.segment_id ASC, cpi.display_order ASC, cpi.id ASC`
+      )
+      .all(concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const availablePrograms = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin
+         FROM concert_applications ca
+         WHERE ca.concert_id = ?
+           AND ca.audition_status = 'passed'
+           AND ca.id NOT IN (
+             SELECT application_id FROM concert_program_items WHERE concert_id = ?
+           )
+         ORDER BY ca.updated_at DESC, ca.id DESC`
+      )
+      .all(concertId, concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const totalProgramCount = items.length;
+    const totalProgramDurationMin = items.reduce((sum, item) => sum + (Number(item.durationMin) || 0), 0);
+    const totalIntervalMin = items.reduce((sum, item) => sum + (Number(item.intervalBeforeMin) || 0), 0);
+    const totalRestMin = segments.reduce((sum, seg) => sum + (Number(seg.restAfterMin) || 0), 0);
+    const totalActualDurationMin = totalProgramDurationMin + totalIntervalMin + totalRestMin;
+
+    const segmentsWithItems = segments.map((seg) => ({
+      ...seg,
+      items: items.filter((item) => item.segmentId === seg.id)
+    }));
+
+    res.json({
+      segments: segmentsWithItems,
+      availablePrograms,
+      stats: {
+        totalProgramCount,
+        totalProgramDurationMin,
+        totalActualDurationMin
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+const programArrangementSchema = z.object({
+  segments: z.array(
+    z.object({
+      id: z.coerce.number().int().optional(),
+      name: z.string().min(1).max(120),
+      displayOrder: z.coerce.number().int().min(0).default(0),
+      restAfterMin: z.coerce.number().int().min(0).max(9999).default(0)
+    })
+  ),
+  items: z.array(
+    z.object({
+      id: z.coerce.number().int().optional(),
+      segmentId: z.coerce.number().int(),
+      applicationId: z.coerce.number().int().positive(),
+      displayOrder: z.coerce.number().int().min(0).default(0),
+      intervalBeforeMin: z.coerce.number().int().min(0).max(9999).default(0)
+    })
+  )
+});
+
+router.put('/admin/concerts/:concertId/program-arrangement', authenticate, requireRole('admin'), (req, res, next) => {
+  try {
+    const concertId = Number(req.params.concertId);
+    if (!Number.isInteger(concertId) || concertId <= 0) {
+      throw new HttpError(400, 'Invalid concertId');
+    }
+
+    const concert = db.prepare('SELECT id FROM concerts WHERE id = ?').get(concertId);
+    if (!concert) {
+      throw new HttpError(404, 'Concert not found');
+    }
+
+    const parsed = programArrangementSchema.parse(req.body);
+
+    const seenApplicationIds = new Set();
+    for (const item of parsed.items) {
+      if (seenApplicationIds.has(item.applicationId)) {
+        throw new HttpError(400, `Duplicate applicationId ${item.applicationId} in items`);
+      }
+      seenApplicationIds.add(item.applicationId);
+    }
+
+    const segmentIdsFromRequest = new Set(
+      parsed.segments.map((s) => s.id).filter((id) => id != null)
+    );
+    for (const item of parsed.items) {
+      if (!segmentIdsFromRequest.has(item.segmentId)) {
+        throw new HttpError(400, `Invalid segmentId ${item.segmentId} in items`);
+      }
+    }
+
+    const passedApplications = db
+      .prepare(
+        `SELECT id FROM concert_applications
+         WHERE concert_id = ? AND audition_status = 'passed'`
+      )
+      .all(concertId);
+    const passedApplicationIds = new Set(passedApplications.map((a) => a.id));
+    for (const item of parsed.items) {
+      if (!passedApplicationIds.has(item.applicationId)) {
+        throw new HttpError(400, `Application ${item.applicationId} is not a passed program for this concert`);
+      }
+    }
+
+    const itemIdsFromRequest = new Set(
+      parsed.items.map((i) => i.id).filter(Boolean)
+    );
+
+    const saveTx = db.transaction(() => {
+      const existingSegments = db
+        .prepare('SELECT id FROM concert_segments WHERE concert_id = ?')
+        .all(concertId)
+        .map((s) => s.id);
+      const segmentsToDelete = existingSegments.filter((id) => !segmentIdsFromRequest.has(id));
+      if (segmentsToDelete.length > 0) {
+        const inClause = segmentsToDelete.map(() => '?').join(',');
+        db.prepare(`DELETE FROM concert_segments WHERE id IN (${inClause})`).run(...segmentsToDelete);
+      }
+
+      const segmentIdMap = new Map();
+      const insertSegment = db.prepare(
+        `INSERT INTO concert_segments (concert_id, name, display_order, rest_after_min)
+         VALUES (?, ?, ?, ?)`
+      );
+      const updateSegment = db.prepare(
+        `UPDATE concert_segments
+         SET name = ?, display_order = ?, rest_after_min = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND concert_id = ?`
+      );
+
+      for (const seg of parsed.segments) {
+        if (seg.id && Number(seg.id) > 0) {
+          updateSegment.run(seg.name, seg.displayOrder, seg.restAfterMin, seg.id, concertId);
+          segmentIdMap.set(seg.id, seg.id);
+        } else {
+          const result = insertSegment.run(concertId, seg.name, seg.displayOrder, seg.restAfterMin);
+          const newId = Number(result.lastInsertRowid);
+          segmentIdMap.set(seg.id, newId);
+        }
+      }
+
+      const existingItems = db
+        .prepare('SELECT id FROM concert_program_items WHERE concert_id = ?')
+        .all(concertId)
+        .map((i) => i.id);
+      const itemsToDelete = existingItems.filter((id) => !itemIdsFromRequest.has(id));
+      if (itemsToDelete.length > 0) {
+        const inClause = itemsToDelete.map(() => '?').join(',');
+        db.prepare(`DELETE FROM concert_program_items WHERE id IN (${inClause})`).run(...itemsToDelete);
+      }
+
+      const insertItem = db.prepare(
+        `INSERT INTO concert_program_items
+           (concert_id, segment_id, application_id, display_order, interval_before_min)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      const updateItem = db.prepare(
+        `UPDATE concert_program_items
+         SET segment_id = ?, display_order = ?, interval_before_min = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND concert_id = ?`
+      );
+
+      for (const item of parsed.items) {
+        const realSegmentId = segmentIdMap.get(item.segmentId);
+        if (!realSegmentId) {
+          throw new HttpError(400, `Segment ${item.segmentId} not found`);
+        }
+        if (item.id && Number(item.id) > 0) {
+          updateItem.run(realSegmentId, item.displayOrder, item.intervalBeforeMin, item.id, concertId);
+        } else {
+          insertItem.run(concertId, realSegmentId, item.applicationId, item.displayOrder, item.intervalBeforeMin);
+        }
+      }
+    });
+
+    saveTx();
+
+    const segments = db
+      .prepare(
+        `SELECT
+           id,
+           concert_id AS concertId,
+           name,
+           display_order AS displayOrder,
+           rest_after_min AS restAfterMin,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM concert_segments
+         WHERE concert_id = ?
+         ORDER BY display_order ASC, id ASC`
+      )
+      .all(concertId)
+      .map((s) => serializePublishingTimestamps(s));
+
+    const items = db
+      .prepare(
+        `SELECT
+           cpi.id,
+           cpi.concert_id AS concertId,
+           cpi.segment_id AS segmentId,
+           cpi.application_id AS applicationId,
+           cpi.display_order AS displayOrder,
+           cpi.interval_before_min AS intervalBeforeMin,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin,
+           cpi.created_at AS createdAt,
+           cpi.updated_at AS updatedAt
+         FROM concert_program_items cpi
+         JOIN concert_applications ca ON ca.id = cpi.application_id
+         WHERE cpi.concert_id = ?
+         ORDER BY cpi.segment_id ASC, cpi.display_order ASC, cpi.id ASC`
+      )
+      .all(concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const availablePrograms = db
+      .prepare(
+        `SELECT
+           ca.id,
+           ca.applicant_name AS applicantName,
+           COALESCE(ca.piece_zh, ca.piece_title) AS pieceZh,
+           COALESCE(ca.piece_en, ca.composer) AS pieceEn,
+           ca.duration_min AS durationMin
+         FROM concert_applications ca
+         WHERE ca.concert_id = ?
+           AND ca.audition_status = 'passed'
+           AND ca.id NOT IN (
+             SELECT application_id FROM concert_program_items WHERE concert_id = ?
+           )
+         ORDER BY ca.updated_at DESC, ca.id DESC`
+      )
+      .all(concertId, concertId)
+      .map((item) => serializePublishingTimestamps(item));
+
+    const totalProgramCount = items.length;
+    const totalProgramDurationMin = items.reduce((sum, item) => sum + (Number(item.durationMin) || 0), 0);
+    const totalIntervalMin = items.reduce((sum, item) => sum + (Number(item.intervalBeforeMin) || 0), 0);
+    const totalRestMin = segments.reduce((sum, seg) => sum + (Number(seg.restAfterMin) || 0), 0);
+    const totalActualDurationMin = totalProgramDurationMin + totalIntervalMin + totalRestMin;
+
+    const segmentsWithItems = segments.map((seg) => ({
+      ...seg,
+      items: items.filter((item) => item.segmentId === seg.id)
+    }));
+
+    res.json({
+      segments: segmentsWithItems,
+      availablePrograms,
+      stats: {
+        totalProgramCount,
+        totalProgramDurationMin,
+        totalActualDurationMin
+      }
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ message: 'Invalid program arrangement payload', details: err.issues });
     }
     return next(err);
   }
