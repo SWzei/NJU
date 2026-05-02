@@ -1061,6 +1061,12 @@ export default {
       hour: "hour",
       hr: "hr",
     },
+    downloadBlockedTitle: "Direct Download Unavailable",
+    downloadBlockedMessage:
+      "You may be unable to access the IMSLP download page directly. Please visit the IMSLP work page to download files, or try direct download anyway.",
+    goToImslpPage: "Go to IMSLP Page",
+    tryDirectDownload: "Try Direct Download",
+    stayHere: "Cancel",
     categories: {
       compositions: "Compositions",
       collaborations: "Collaborations",

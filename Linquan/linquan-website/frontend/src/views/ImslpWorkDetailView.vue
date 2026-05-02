@@ -87,23 +87,45 @@
               <span v-if="img.size">{{ t('imslp.fileSize', { size: formatBytes(img.size) }) }}</span>
             </div>
           </div>
-          <a
+          <button
             class="btn secondary"
-            :href="downloadUrl(img)"
-            target="_blank"
-            rel="noopener noreferrer"
+            @click="onDownloadClick(img)"
           >
             {{ t('common.download') }}
-          </a>
+          </button>
         </li>
       </ul>
       <p v-else class="subtle">{{ t('imslp.noScores') }}</p>
+    </div>
+
+    <div v-if="showModal" class="modal-backdrop" @click="closeModal">
+      <div class="modal-dialog" @click.stop>
+        <h3 class="modal-title">{{ t('imslp.downloadBlockedTitle') }}</h3>
+        <p class="modal-body">{{ t('imslp.downloadBlockedMessage') }}</p>
+        <div class="modal-actions">
+          <a
+            class="btn primary"
+            :href="imslpPageUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click="closeModal"
+          >
+            {{ t('imslp.goToImslpPage') }}
+          </a>
+          <button class="btn secondary" @click="forceDownload">
+            {{ t('imslp.tryDirectDownload') }}
+          </button>
+          <button class="btn ghost" @click="closeModal">
+            {{ t('imslp.stayHere') }}
+          </button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import api from '@/services/api';
 import { useI18n } from '@/i18n';
@@ -119,6 +141,17 @@ const permlink = route.params.permlink;
 const detail = ref({});
 const loading = ref(true);
 const error = ref('');
+const showModal = ref(false);
+const pendingDownloadUrl = ref('');
+// null = unknown, true = likely direct-downloadable, false = likely blocked
+const imslpDirectDownload = ref(null);
+
+const IMSLP_DIRECT_KEY = 'imslp_direct_download';
+
+const imslpPageUrl = computed(() => {
+  const p = detail.value.permlink || permlink || '';
+  return `https://cn.imslp.org/wiki/${encodeURIComponent(p)}`;
+});
 
 function formatBytes(bytes) {
   if (bytes == null) return '-';
@@ -128,12 +161,70 @@ function formatBytes(bytes) {
 }
 
 function downloadUrl(img) {
-  const encodedUrl = encodeURIComponent(img.url);
-  const encodedName = encodeURIComponent(img.title);
-  return `/api/imslp/download?url=${encodedUrl}&filename=${encodedName}`;
+  // Use IMSLP's official download endpoint which handles disclaimer checks
+  // and bot avoidance via JavaScript redirect (friendlyredirect mechanism).
+  // The browser can execute JS and complete the download flow normally (maybe).
+  return `https://imslp.org/wiki/Special:ImageFromIndex/${img.id}`;
+}
+
+async function checkUserRegion() {
+  // If user has previously indicated they can download directly, trust that.
+  const cached = localStorage.getItem(IMSLP_DIRECT_KEY);
+  if (cached === 'true') return true;
+  if (cached === 'false') return false;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  try {
+    const resp = await fetch('https://ipapi.co/country/', {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) return true; // conservative fallback
+    const country = (await resp.text()).trim();
+    // CN = mainland China, HK / MO / TW are separate codes.
+    const blocked = country === 'CN';
+    localStorage.setItem(IMSLP_DIRECT_KEY, String(!blocked));
+    return !blocked;
+  } catch {
+    clearTimeout(timeoutId);
+    return true; // fallback: assume direct download works
+  }
+}
+
+async function onDownloadClick(img) {
+  const url = downloadUrl(img);
+  if (imslpDirectDownload.value === null) {
+    imslpDirectDownload.value = await checkUserRegion();
+  }
+  if (imslpDirectDownload.value) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } else {
+    pendingDownloadUrl.value = url;
+    showModal.value = true;
+  }
+}
+
+function closeModal() {
+  showModal.value = false;
+  pendingDownloadUrl.value = '';
+}
+
+function forceDownload() {
+  localStorage.setItem(IMSLP_DIRECT_KEY, 'true');
+  imslpDirectDownload.value = true;
+  if (pendingDownloadUrl.value) {
+    window.open(pendingDownloadUrl.value, '_blank', 'noopener,noreferrer');
+  }
+  closeModal();
 }
 
 onMounted(async () => {
+  // Pre-load cached preference without blocking render.
+  const cached = localStorage.getItem(IMSLP_DIRECT_KEY);
+  if (cached === 'true') imslpDirectDownload.value = true;
+  if (cached === 'false') imslpDirectDownload.value = false;
+
   try {
     const { data } = await api.get(`/imslp/works/${encodeURIComponent(permlink)}`);
     detail.value = data;
@@ -293,5 +384,57 @@ onMounted(async () => {
   background: rgba(var(--success-rgb), 0.08);
   border: 1px solid rgba(var(--success-rgb), 0.2);
   color: var(--success);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.modal-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.modal-body {
+  margin: 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.btn.ghost:hover {
+  background: var(--panel-soft);
+  color: var(--ink);
 }
 </style>

@@ -198,8 +198,12 @@ def _fetch_work_detail_data(page):
 
         # Fix image URL
         url = f.imageinfo.get("url", "")
-        if url.startswith("/"):
-            url = "http:" + url
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            url = "https://imslp.org" + url
+        elif url.startswith("http:"):
+            url = "https:" + url[5:]
 
         images.append({
             "id": file_id,

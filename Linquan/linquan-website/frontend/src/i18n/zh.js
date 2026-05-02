@@ -1020,6 +1020,12 @@ export default {
       hour: "小时",
       hr: "小时",
     },
+    downloadBlockedTitle: "无法直接下载",
+    downloadBlockedMessage:
+      "检测到您当前可能无法直接访问 IMSLP 下载页面。请前往 IMSLP 作品详情页选择文件下载，或尝试直接下载（需打开国外代理）。",
+    goToImslpPage: "前往 IMSLP 详情页",
+    tryDirectDownload: "仍尝试直接下载",
+    stayHere: "取消",
     categories: {
       compositions: "作品",
       collaborations: "合作作品",
