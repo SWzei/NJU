@@ -100,7 +100,7 @@
 
       <div v-if="loadingWorks" class="subtle">{{ t('imslp.loadingWorks') }}</div>
       <div v-else>
-        <div v-for="(groups, category) in groupedTables" :key="category" class="category-block">
+        <div v-for="category in sortedCategories" :key="category" class="category-block">
           <h3 class="subsection-title">{{ translateImslpLabel('categories', category) }}</h3>
           <p v-if="category === 'Collections'" class="collection-hint subtle">
             {{ t('imslp.collectionHint') }}
@@ -110,20 +110,20 @@
             :key="groupKey"
             class="group-block"
           >
-            <div v-if="groups[groupKey]?.length">
-              <h4 v-if="hasMultipleGroups(groups)" class="group-title">
+            <div v-if="groupedTables[category][groupKey]?.length">
+              <h4 v-if="hasMultipleGroups(groupedTables[category])" class="group-title">
                 {{ groupLabel(groupKey) }}
               </h4>
               <div class="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th v-for="(header, idx) in tableHeaders(groups[groupKey])" :key="idx">{{ header }}</th>
+                      <th v-for="(header, idx) in tableHeaders(groupedTables[category][groupKey])" :key="idx">{{ header }}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="(row, ridx) in groups[groupKey]" :key="ridx">
-                      <td v-for="(header, hidx) in tableHeaders(groups[groupKey])" :key="hidx">
+                    <tr v-for="(row, ridx) in groupedTables[category][groupKey]" :key="ridx">
+                      <td v-for="(header, hidx) in tableHeaders(groupedTables[category][groupKey])" :key="hidx">
                         <div class="cell-content">
                           <router-link
                             v-if="getLink(row, header)"
@@ -254,6 +254,15 @@ const typeChartData = computed(() =>
 const instrumentChartData = computed(() =>
   buildPieChart(detail.value.metadata?.instrumentDistributionChartData)
 );
+
+const sortedCategories = computed(() => {
+  const keys = Object.keys(groupedTables.value || {});
+  return keys.sort((a, b) => {
+    if (a === 'Compositions') return -1;
+    if (b === 'Compositions') return 1;
+    return a.localeCompare(b);
+  });
+});
 
 let controller = new AbortController();
 
